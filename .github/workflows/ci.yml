@@ -85,5 +85,3 @@ jobs:
             junction-core/target/*.jar
             junction-starter/target/*.jar
             junction-samples/target/*.jar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
