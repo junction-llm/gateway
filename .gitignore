@@ -1,0 +1,9 @@
+.m2/
+.idea/
+.vscode/
+*.iml
+
+target/
+**/target/
+
+junction-samples/logs/
