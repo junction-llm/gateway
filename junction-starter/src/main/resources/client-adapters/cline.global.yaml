@@ -1,0 +1,72 @@
+# Client Adapter Configuration for Cline
+# This adapter applies compatibility patches for Cline Extension 3.x, which has strict tool calling requirements.
+
+id: "cline-global"
+name: "Cline Global"
+description: "Fixes tool calling strictness for Cline 3.x. Applies proactive system prompt injection and reactive response transforms to ensure XML tool calls include all required parameters."
+
+detection:
+  header-contains:
+     User-Agent: "Cline/"
+
+patches:
+  system-prompt-injection:
+    enabled: true
+    position: "append"  # prepend, append, or replace
+    content: |
+      # TOOL EXECUTION CRITICAL RULES (Override)
+      You are operating in a strict XML-based tool-calling environment. To prevent execution failures, you MUST follow these syntax rules:
+
+      1. **replace_in_file**: This tool REQUIRES two tags: <path> and <diff>.
+         - The <diff> content MUST use the SEARCH/REPLACE format.
+         - Example:
+           <replace_in_file>
+           <path>src/file.js</path>
+           <diff>
+           <<<<<<< SEARCH
+           old code here
+           =======
+           new code here
+           >>>>>>> REPLACE
+           </diff>
+           </replace_in_file>
+
+      2. **Strict Matching**: The SEARCH block must match the file content EXACTLY, including every space, tab, and newline. If the match is not perfect, the tool will fail.
+
+      3. **No Parameter Omission**: Never omit a required tag (path, command, diff, content, etc.). If you are unsure of a path, use `list_files` first.
+
+      4. **Thinking/Action Separation**: Complete your internal reasoning first. Do NOT nest tool tags inside <thinking> or other conversational tags. Tool calls must be at the top level of your response.
+
+      5. **Tool Naming**: Only use the exact tool names provided in the environment (e.g., `execute_command`, `read_file`, `replace_in_file`, `write_to_file`). Do not use aliases like "edit_file" or "patch".
+
+      6. **Fallback Protocol**: If a `replace_in_file` call fails twice due to a "diff" error, you MUST use `write_to_file` to rewrite the entire file with the updated content to ensure the task progresses.
+
+      # EXAMPLES OF CORRECT EXECUTION
+      <example>
+      User: Change the port in the config file.
+      Assistant: <thinking>The user wants to update the port. I need to find the port line in config.json and change it to 8080.</thinking>
+      <replace_in_file>
+      <path>config.json</path>
+      <diff>
+      <<<<<<< SEARCH
+      "port": 3000,
+      =======
+      "port": 8080,
+      >>>>>>> REPLACE
+      </diff>
+      </replace_in_file>
+      </example>
+
+      # MANDATORY RESPONSE FORMAT
+      You MUST start your response with <thinking> tags. 
+      Immediately following </thinking>, you MUST provide the tool call. 
+      DO NOT include any conversational filler between tags.
+
+  response-transforms:
+    - type: "fix-missing-xml-tags"
+      enabled: true
+      # Regex-based fixes are applied automatically for known patterns
+      # See ClientCompatibilityService.fixMissingXmlTags() for implementation
+
+    - type: "validate-xml-structure"
+      enabled: false  # Placeholder for future XML validation

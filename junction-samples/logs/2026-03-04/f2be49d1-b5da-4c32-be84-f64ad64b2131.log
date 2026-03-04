@@ -1,0 +1,15 @@
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] === INCOMING REQUEST [JSON] ===
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Client IP: 127.0.0.1
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request URI: POST /v1/chat/completions
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request Query String: null
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request Model: test-model
+2026-03-04T21:06:58.559Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request Stream: false
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request Temperature: null
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Request Messages Count: 1
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Accept Header: application/json
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] User-Agent Header: null
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] X-API-Key Header: absent
+2026-03-04T21:06:58.560Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] === ===
+2026-03-04T21:06:58.561Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] OllamaProvider executing request: model=test-model, stream=false, temp=0.3
+2026-03-04T21:06:58.563Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] Ollama stream marked as complete
+2026-03-04T21:06:58.563Z [INFO] [f2be49d1-b5da-4c32-be84-f64ad64b2131] NDJSON stream closed

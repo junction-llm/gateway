@@ -1,0 +1,21 @@
+2026-03-04T21:07:28.672Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] === INCOMING REQUEST [SSE] ===
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Client IP: 127.0.0.1
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request URI: POST /v1/chat/completions
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request Query String: null
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request Model: test-model
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request Stream: true
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request Temperature: null
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Request Messages Count: 1
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Accept Header: text/event-stream
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] User-Agent Header: null
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] X-API-Key Header: absent
+2026-03-04T21:07:28.674Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] === ===
+2026-03-04T21:07:28.675Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Starting SSE stream for model: test-model
+2026-03-04T21:07:28.676Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Routing request
+2026-03-04T21:07:28.699Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Routed to provider: ollama
+2026-03-04T21:07:28.700Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Processing response stream
+2026-03-04T21:07:28.700Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] OllamaProvider executing request: model=test-model, stream=true, temp=0.3
+2026-03-04T21:07:28.716Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Ollama stream marked as complete
+2026-03-04T21:07:28.717Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] NDJSON stream closed
+2026-03-04T21:07:28.717Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] Sending [DONE] marker
+2026-03-04T21:07:28.717Z [INFO] [95217ba7-d738-40e3-9fc6-bfc1dddfcce1] SSE stream completed successfully, sent 2 chunks

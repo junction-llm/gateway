@@ -1,0 +1,6 @@
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/provider/GeminiProviderTest.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/provider/OllamaProviderTest.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/security/ApiKeyValidatorTest.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/security/InMemoryApiKeyRepositoryTest.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/security/InMemoryRateLimiterTest.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-core/src/test/java/io/junction/gateway/core/security/IpRateLimiterTest.java

@@ -1,0 +1,59 @@
+server:
+  port: 8080
+  address: 0.0.0.0
+
+junction:
+  providers:
+    ollama:
+      enabled: true
+      base-url: http://localhost:11434
+      default-model: llama3.1:latest
+    gemini:
+      enabled: false
+      api-key: ${GEMINI_API_KEY:}
+      model: gemini-1.5-flash
+  
+  security:
+    api-key:
+      required: true
+      
+      storage: memory
+      
+      # Reserved for future file-based storage support
+      # file-path: ${JUNCTION_API_KEYS_FILE:./api-keys.yml}
+      
+      # Reserved for future H2 storage support
+      # h2-url: jdbc:h2:file:${JUNCTION_H2_PATH:./data/junction};DB_CLOSE_DELAY=-1
+      # h2-username: sa
+      # h2-password: ""
+      
+      # Reserved for future PostgreSQL storage support
+      # postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
+      # postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
+      # postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:}
+      
+      preconfigured:
+        - key: ${JUNCTION_API_KEY_1:}
+          name: "Development Key"
+          tier: ENTERPRISE  # Options: FREE, PRO, ENTERPRISE
+  
+  client-adapters:
+    classpath-enabled: true    
+    external-directory: ${JUNCTION_CLIENT_ADAPTERS_DIR:}
+    hot-reload: true    
+    external-priority: true
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    serialization:
+      INDENT_OUTPUT: false
+
+logging:
+  level:
+    io.junction.gateway: INFO
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

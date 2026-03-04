@@ -1,0 +1,12 @@
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/GatewayController.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/JunctionAutoConfiguration.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/JunctionProperties.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientAdapter.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientAdapterConfig.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientAdapterLoader.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientAdapterProperties.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientCompatibilityService.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/clientcompat/ClientDetectionService.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/config/JacksonConfig.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/logging/PerRequestFileAppender.java
+/Users/juanhidalgo/Documents/GitHub/junction-llm/gateway/junction-starter/src/main/java/io/junction/gateway/starter/security/ApiKeyInitializer.java

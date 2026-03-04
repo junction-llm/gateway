@@ -1,0 +1,40 @@
+# Caddy configuration for Junction LLM Gateway
+# Auto HTTPS with Let's Encrypt
+
+gateway.example.com {
+    # Enable logging
+    log {
+        output file /data/caddy.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+    }
+
+    # Reverse proxy to Spring Boot application
+    # host.docker.internal allows Docker to reach the Windows host
+    # If this doesn't work, replace with your Windows IP address (e.g., 192.168.1.100:8080)
+    reverse_proxy host.docker.internal:8080 {
+        # Headers
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME type sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Compress responses
+    encode gzip zstd
+}
