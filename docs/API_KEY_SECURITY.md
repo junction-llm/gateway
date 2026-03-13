@@ -1,21 +1,22 @@
 # API Key Security
 
-> Version: `0.0.1`  
-> Status: Available in the first public release
+> Version: `0.0.2`  
+> Status: Available in the current public release
 
 ## Overview
 
-Junction Gateway includes API key validation for the chat completions endpoint.
+Junction Gateway includes API key validation for the protected chat completions and model listing endpoints.
 
-Supported in `0.0.1`:
+Supported in `0.0.2`:
 - In-memory API key storage
 - SHA-256 hashed key storage
+- Authentication via `X-API-Key` or `Authorization: Bearer`
 - Tier-based rate limiting
 - Optional IP allowlisting
 - Optional per-key model restrictions
 - OpenAI-style error responses
 
-Not yet implemented in `0.0.1`:
+Not yet implemented in `0.0.2`:
 - File-backed API key storage
 - H2-backed API key storage
 - PostgreSQL-backed API key storage
@@ -37,15 +38,26 @@ junction:
 
 ## Using the API
 
+Both protected endpoints accept API keys via `X-API-Key` or `Authorization: Bearer`.
+
+Chat completions:
+
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: ${JUNCTION_API_KEY_1}" \
+  -H "Authorization: Bearer ${JUNCTION_API_KEY_1}" \
   -d '{
     "model": "llama3.1",
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": false
   }'
+```
+
+Model listing:
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer ${JUNCTION_API_KEY_1}"
 ```
 
 ## Key Format
@@ -68,7 +80,7 @@ junc_aB3dE5fG7hI9jK1lM2nO3pQ4rS5tU6vW7xY8zA0
 
 ## Current Storage Model
 
-`0.0.1` uses the in-memory repository by default.
+`0.0.2` uses the in-memory repository by default.
 
 Implications:
 - keys are lost on restart

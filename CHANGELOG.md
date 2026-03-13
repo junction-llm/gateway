@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.2 - 2026-03-13
+
+Expanded the public gateway surface and authentication compatibility.
+
+### Added
+
+- OpenAI-compatible `GET /v1/models` endpoint
+- Provider model discovery for Ollama and Gemini
+- Model list caching to reduce repeated provider lookups
+- Integration coverage for Bearer auth, dual-header validation, and model listing
+
+### Changed
+
+- Accepted API keys from `Authorization: Bearer` in addition to `X-API-Key`
+- Clarified API key validation errors to mention both supported auth headers
+
+### Known Limitations
+
+- API key storage is still in-memory only in `0.0.2`
+- Routing strategy is still limited to round-robin
+- The public API surface is still focused on chat completions and model listing
+- Deployment assets are examples and require environment-specific customization
+
 ## 0.0.1 - 2026-03-04
 
 First public release.

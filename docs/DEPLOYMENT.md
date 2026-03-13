@@ -112,6 +112,7 @@ Once running, access your gateway at (default domain):
 ```bash
 curl -X POST https://gateway.example.com/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${JUNCTION_API_KEY_1}" \
   -d '{
     "model": "llama3.1",
     "messages": [{"role": "user", "content": "Hello"}],

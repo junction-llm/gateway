@@ -6,21 +6,23 @@ Junction is an OpenAI-compatible LLM gateway for the JVM. It exposes `/v1/chat/c
 
 ## Status
 
-`v0.0.1` is the first public release.
+`v0.0.2` is the current public release.
 
-What is ready in `0.0.1`:
+What is ready in `0.0.2`:
 - OpenAI-compatible `POST /v1/chat/completions`
+- OpenAI-compatible `GET /v1/models`
 - Streaming and non-streaming responses
 - Ollama provider support
 - Gemini provider support
 - Round-robin routing across healthy providers
-- API key validation with tier-based rate limiting (FREE, PRO, ENTERPRISE)
+- API key validation via `X-API-Key` or `Authorization: Bearer`
+- Tier-based rate limiting (FREE, PRO, ENTERPRISE)
 - IP rate limiting and optional IP allowlisting with CIDR support
 - Client compatibility adapters for Cline and Roo Code
 - Per-request log files
 - Spring Boot starter auto-configuration
 
-What is not in `0.0.1`:
+What is not in `0.0.2`:
 - Persistent API key storage backends beyond in-memory
 - Advanced routing strategies beyond round-robin
 - Full OpenAI API surface outside chat completions
@@ -39,7 +41,7 @@ What is not in `0.0.1`:
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Ollama | Supported | Best-tested path for `0.0.1` |
+| Ollama | Supported | Best-tested path for `0.0.2` |
 | Gemini | Supported | Optional, requires `GEMINI_API_KEY` |
 
 ## Quick Start
@@ -63,7 +65,9 @@ cd junction-samples
 mvn spring-boot:run
 ```
 
-## Example Request
+## Example Requests
+
+Junction accepts API keys through either `X-API-Key` or `Authorization: Bearer`.
 
 Streaming:
 
@@ -93,6 +97,14 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   }'
 ```
 
+Model listing:
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer ${JUNCTION_API_KEY_1}"
+```
+
 ## Configuration
 
 The sample configuration lives in `junction-samples/src/main/resources/application.yml`.
@@ -110,20 +122,20 @@ Important settings:
 ## Production Notes
 
 - The sample application is a demo and reference app, not a managed production distribution.
-- API keys are stored in-memory in `0.0.1`.
-- The deployment files in [`DEPLOYMENT.md`](DEPLOYMENT.md), [`Caddyfile`](Caddyfile), and [`docker-compose.caddy.yml`](docker-compose.caddy.yml) are example assets and should be customized before public deployment.
+- API keys are stored in-memory in `0.0.2`.
+- The deployment files in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`Caddyfile`](Caddyfile), and [`docker-compose.caddy.yml`](docker-compose.caddy.yml) are example assets and should be customized before public deployment.
 - Per-request logs are written under `junction-samples/logs/`.
 
 ## Documentation
 
 - API key security: [`docs/API_KEY_SECURITY.md`](docs/API_KEY_SECURITY.md)
-- Example deployment guide: [`DEPLOYMENT.md`](DEPLOYMENT.md)
+- Example deployment guide: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 - Client adapter configuration: [`junction-starter/src/main/resources/client-adapters/README.md`](junction-starter/src/main/resources/client-adapters/README.md)
 - Agent guidance for contributors: [`AGENTS.md`](AGENTS.md)
 
 ## Compatibility Matrix
 
-| Area | `0.0.1` |
+| Area | `0.0.2` |
 |------|---------|
 | Java runtime | Java 25 |
 | Build tool | Maven reactor |
