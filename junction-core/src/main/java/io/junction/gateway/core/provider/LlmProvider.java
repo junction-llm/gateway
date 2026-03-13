@@ -1,6 +1,7 @@
 package io.junction.gateway.core.provider;
 
 import io.junction.gateway.core.model.*;
+import java.util.List;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
 
@@ -19,5 +20,9 @@ public sealed interface LlmProvider permits
             .gather(responseAdapter())
             .findFirst()
             .orElseThrow();
+    }
+    
+    default List<ModelInfo> getAvailableModels() {
+        return List.of();
     }
 }
