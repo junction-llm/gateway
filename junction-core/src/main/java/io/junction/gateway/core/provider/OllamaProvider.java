@@ -10,11 +10,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 public final class OllamaProvider implements LlmProvider {
     private static final Logger log = LoggerFactory.getLogger(OllamaProvider.class);
@@ -198,6 +202,51 @@ public final class OllamaProvider implements LlmProvider {
             });
         
         return stream.onClose(() -> log.info("[{}] NDJSON stream closed", traceId));
+    }
+    
+    @Override
+    public List<ModelInfo> getAvailableModels() {
+        try {
+            var req = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/tags"))
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            
+            var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            
+            if (resp.statusCode() != 200) {
+                log.warn("Failed to fetch models from Ollama: HTTP {}", resp.statusCode());
+                return List.of();
+            }
+            
+            var objectMapper = new ObjectMapper();
+            var rootNode = objectMapper.readTree(resp.body());
+            var modelsNode = rootNode.path("models");
+            
+            if (!modelsNode.isArray()) {
+                log.warn("Ollama /api/tags response missing 'models' array");
+                return List.of();
+            }
+            
+            var result = new ArrayList<ModelInfo>();
+            for (var modelNode : modelsNode) {
+                var modelName = modelNode.path("name").asText(null);
+                if (modelName != null && !modelName.isBlank()) {
+                    result.add(ModelInfo.of(modelName, Map.of("owned_by", "ollama")));
+                }
+            }
+            
+            log.info("Fetched {} models from Ollama at {}", result.size(), baseUrl);
+            return result;
+            
+        } catch (java.net.http.HttpTimeoutException e) {
+            log.warn("Timeout fetching models from Ollama: {}", e.getMessage());
+            return List.of();
+        } catch (Exception e) {
+            log.error("Error fetching models from Ollama: {}", e.getMessage(), e);
+            return List.of();
+        }
     }
     
     @Override

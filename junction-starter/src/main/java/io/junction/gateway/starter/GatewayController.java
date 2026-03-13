@@ -1,5 +1,6 @@
 package io.junction.gateway.starter;
 
+import io.junction.gateway.core.cache.ModelCacheService;
 import io.junction.gateway.core.context.RequestContext;
 import io.junction.gateway.core.exception.ApiKeyAuthenticationException;
 import io.junction.gateway.core.exception.IpRateLimitExceededException;
@@ -10,7 +11,6 @@ import io.junction.gateway.core.model.*;
 import io.junction.gateway.core.router.Router;
 import io.junction.gateway.core.security.ApiKeyValidator;
 import io.junction.gateway.core.security.IpRateLimiter;
-import io.junction.gateway.core.security.RateLimiter;
 import io.junction.gateway.starter.clientcompat.ClientAdapterConfig;
 import io.junction.gateway.starter.clientcompat.ClientCompatibilityService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -62,6 +62,7 @@ public class GatewayController {
     private final ApiKeyValidator apiKeyValidator;
     private final IpRateLimiter ipRateLimiter;
     private final JunctionProperties junctionProperties;
+    private final ModelCacheService modelCacheService;
     
     @Autowired
     public GatewayController(Router router, 
@@ -69,20 +70,21 @@ public class GatewayController {
                            ClientCompatibilityService clientCompatService,
                            ApiKeyValidator apiKeyValidator,
                            IpRateLimiter ipRateLimiter,
-                           JunctionProperties junctionProperties) {
+                           JunctionProperties junctionProperties,
+                           ModelCacheService modelCacheService) {
         this.router = router;
         this.jsonMapper = jsonMapper;
         this.clientCompatService = clientCompatService;
         this.apiKeyValidator = apiKeyValidator;
         this.ipRateLimiter = ipRateLimiter;
         this.junctionProperties = junctionProperties;
+        this.modelCacheService = modelCacheService;
     }
     
     /**
      * Streaming chat completions endpoint (SSE).
      * 
      * @param request the chat completion request payload
-     * @param apiKey the API key from the X-API-Key header
      * @param acceptHeader the Accept header to determine response type
      * @param userAgent the User-Agent header for logging and client detection
      * @param httpServletRequest the raw HTTP servlet request for client detection and logging
@@ -91,16 +93,16 @@ public class GatewayController {
     @PostMapping(value = "/chat/completions", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatCompletionsStreaming(
             @RequestBody ChatCompletionRequest request,
-            @RequestHeader(value = "X-API-Key", required = false) String apiKey,
             @RequestHeader(value = "Accept", required = false) String acceptHeader,
             @RequestHeader(value = "User-Agent", required = false) String userAgent,
             HttpServletRequest httpServletRequest) {
         
         var traceId = java.util.UUID.randomUUID();
+        var resolvedApiKey = resolveApiKey(httpServletRequest);
         
         var ctx = new RequestContext.Context(
             traceId,
-            apiKey,
+            resolvedApiKey.apiKey(),
             request.model(),
             java.time.Instant.now()
         );
@@ -108,11 +110,11 @@ public class GatewayController {
         ApiKeyValidator.ValidationResult validation;
         try (var ignored = MDC.putCloseable("traceId", traceId.toString())) {
             ScopedValue.where(RequestContext.key(), ctx).run(() -> {
-                logRequestDetails(request, apiKey, acceptHeader, userAgent, httpServletRequest, "SSE", traceId);
+                logRequestDetails(request, resolvedApiKey, acceptHeader, userAgent, httpServletRequest, "SSE", traceId);
             });
 
             validation = ScopedValue.where(RequestContext.key(), ctx).call(() -> {
-                return validateApiKey(apiKey, httpServletRequest, request.model());
+                return validateApiKey(resolvedApiKey.apiKey(), httpServletRequest, request.model());
             });
         }
         
@@ -130,16 +132,16 @@ public class GatewayController {
     @PostMapping(value = "/chat/completions", produces = MediaType.APPLICATION_JSON_VALUE)
     public Object chatCompletionsJson(
             @RequestBody ChatCompletionRequest request,
-            @RequestHeader(value = "X-API-Key", required = false) String apiKey,
             @RequestHeader(value = "Accept", required = false) String acceptHeader,
             @RequestHeader(value = "User-Agent", required = false) String userAgent,
             HttpServletRequest httpServletRequest) {
         
         var traceId = java.util.UUID.randomUUID();
+        var resolvedApiKey = resolveApiKey(httpServletRequest);
         
         var ctx = new RequestContext.Context(
             traceId,
-            apiKey,
+            resolvedApiKey.apiKey(),
             request.model(),
             java.time.Instant.now()
         );
@@ -147,11 +149,11 @@ public class GatewayController {
         ApiKeyValidator.ValidationResult validation;
         try (var ignored = MDC.putCloseable("traceId", traceId.toString())) {
             ScopedValue.where(RequestContext.key(), ctx).run(() -> {
-                logRequestDetails(request, apiKey, acceptHeader, userAgent, httpServletRequest, "JSON", traceId);
+                logRequestDetails(request, resolvedApiKey, acceptHeader, userAgent, httpServletRequest, "JSON", traceId);
             });
 
             validation = ScopedValue.where(RequestContext.key(), ctx).call(() -> {
-                return validateApiKey(apiKey, httpServletRequest, request.model());
+                return validateApiKey(resolvedApiKey.apiKey(), httpServletRequest, request.model());
             });
         }
         
@@ -353,7 +355,7 @@ public class GatewayController {
         return request.getRemoteAddr();
     }
     
-    private void logRequestDetails(ChatCompletionRequest request, String apiKey, String acceptHeader,
+    private void logRequestDetails(ChatCompletionRequest request, ResolvedApiKey resolvedApiKey, String acceptHeader,
                                     String userAgent, HttpServletRequest httpServletRequest, String endpointType, java.util.UUID traceId) {
         log.info("[{}] === INCOMING REQUEST [{}] ===", traceId, endpointType);
         log.info("[{}] Client IP: {}", traceId, getClientIp(httpServletRequest));
@@ -365,7 +367,7 @@ public class GatewayController {
         log.info("[{}] Request Messages Count: {}", traceId, request.messages() != null ? request.messages().size() : "null");
         log.info("[{}] Accept Header: {}", traceId, acceptHeader);
         log.info("[{}] User-Agent Header: {}", traceId, userAgent);
-        log.info("[{}] X-API-Key Header: {}", traceId, apiKey != null ? "present" : "absent");
+        log.info("[{}] Authentication Source: {}", traceId, resolvedApiKey.source());
         log.info("[{}] === ===", traceId);
         
         
@@ -569,6 +571,72 @@ public class GatewayController {
         return value;
     }
     
+    /**
+     * Lists available models (OpenAI-compatible).
+     * 
+     * <p>GET /v1/models returns a list of models available through the gateway.
+     * 
+     * <p>API key authentication is required. Models are cached for 24 hours to avoid
+     * hitting provider APIs on every request.
+     * 
+     * @param request the HTTP servlet request for client IP extraction
+     * @return a ModelList containing all available models from enabled providers
+     * 
+     * @since 0.0.2
+     */
+    @GetMapping("/models")
+    public ResponseEntity<ModelList> listModels(
+            HttpServletRequest request) {
+        var resolvedApiKey = resolveApiKey(request);
+        
+        var clientIp = getClientIp(request);
+        
+        var validation = validateApiKey(resolvedApiKey.apiKey(), request, null);
+        if (!validation.valid()) {
+            throw new ApiKeyAuthenticationException(validation);
+        }
+        
+        var ipRateResult = ipRateLimiter.checkAndIncrement(clientIp);
+        if (!ipRateResult.isAllowed()) {
+            log.warn("IP {} exceeded rate limit for /models endpoint", clientIp);
+            throw new IpRateLimitExceededException(clientIp, ipRateResult);
+        }
+        
+        var models = new java.util.ArrayList<ModelInfo>();
+        
+        var allProviders = router.getProviders();
+        
+        if (junctionProperties.getOllama().isEnabled()) {
+            var ollamaModels = modelCacheService.getModels(
+                "ollama",
+                "Ollama",
+                () -> allProviders.stream()
+                    .filter(p -> p.providerId().equals("ollama"))
+                    .findFirst()
+                    .map(p -> (io.junction.gateway.core.provider.OllamaProvider) p)
+                    .map(io.junction.gateway.core.provider.OllamaProvider::getAvailableModels)
+                    .orElse(java.util.List.of())
+            );
+            models.addAll(ollamaModels);
+        }
+        
+        if (junctionProperties.getGemini().isEnabled()) {
+            var geminiModels = modelCacheService.getModels(
+                "gemini",
+                "Gemini",
+                () -> allProviders.stream()
+                    .filter(p -> p.providerId().equals("gemini"))
+                    .findFirst()
+                    .map(p -> (io.junction.gateway.core.provider.GeminiProvider) p)
+                    .map(io.junction.gateway.core.provider.GeminiProvider::getAvailableModels)
+                    .orElse(java.util.List.of())
+            );
+            models.addAll(geminiModels);
+        }
+        
+        return ResponseEntity.ok(ModelList.of(models));
+    }
+    
     
     
     @ExceptionHandler(ApiKeyAuthenticationException.class)
@@ -629,5 +697,60 @@ public class GatewayController {
         
         public record Error(String message, String type, String code) {}
     }
+
+    private ResolvedApiKey resolveApiKey(HttpServletRequest request) {
+        String xApiKey = normalizeCredential(request.getHeader("X-API-Key"));
+        String bearerApiKey = extractBearerApiKey(request.getHeader("Authorization"));
+
+        if (xApiKey != null && bearerApiKey != null) {
+            if (!xApiKey.equals(bearerApiKey)) {
+                throw new ApiKeyAuthenticationException(
+                    "Conflicting API credentials provided in X-API-Key and Authorization headers.",
+                    HttpStatus.UNAUTHORIZED.value(),
+                    "invalid_key"
+                );
+            }
+            return new ResolvedApiKey(xApiKey, "both");
+        }
+
+        if (xApiKey != null) {
+            return new ResolvedApiKey(xApiKey, "x-api-key");
+        }
+
+        if (bearerApiKey != null) {
+            return new ResolvedApiKey(bearerApiKey, "authorization");
+        }
+
+        return new ResolvedApiKey(null, "absent");
+    }
+
+    private String extractBearerApiKey(String authorizationHeader) {
+        if (authorizationHeader == null) {
+            return null;
+        }
+
+        int separatorIndex = authorizationHeader.indexOf(' ');
+        if (separatorIndex <= 0) {
+            return null;
+        }
+
+        String scheme = authorizationHeader.substring(0, separatorIndex);
+        if (!scheme.equalsIgnoreCase("Bearer")) {
+            return null;
+        }
+
+        return normalizeCredential(authorizationHeader.substring(separatorIndex + 1));
+    }
+
+    private String normalizeCredential(String credential) {
+        if (credential == null) {
+            return null;
+        }
+
+        String trimmed = credential.trim();
+        return trimmed.isBlank() ? null : trimmed;
+    }
+
+    private record ResolvedApiKey(String apiKey, String source) {}
     
 }

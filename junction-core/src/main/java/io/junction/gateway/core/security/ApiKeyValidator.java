@@ -59,7 +59,7 @@ public class ApiKeyValidator {
         if (rawKey == null || rawKey.isBlank()) {
             return ValidationResult.failure(
                 ValidationError.MISSING_KEY,
-                "API key is required. Provide it in the X-API-Key header."
+                "API key is required. Provide it in the X-API-Key header or Authorization: Bearer header."
             );
         }
         
@@ -157,7 +157,10 @@ public class ApiKeyValidator {
      */
     public ValidationResult validateFormat(String rawKey) {
         if (rawKey == null || rawKey.isBlank()) {
-            return ValidationResult.failure(ValidationError.MISSING_KEY, "API key is required.");
+            return ValidationResult.failure(
+                ValidationError.MISSING_KEY,
+                "API key is required. Provide it in the X-API-Key header or Authorization: Bearer header."
+            );
         }
         
         if (!rawKey.startsWith(KEY_PREFIX)) {

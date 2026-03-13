@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface Router {
     LlmProvider route(ChatCompletionRequest request);
+
+    List<LlmProvider> getProviders();
 }

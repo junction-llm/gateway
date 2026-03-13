@@ -47,4 +47,9 @@ public class RoundRobinRouter implements Router {
     }
     
     private record HealthResult(LlmProvider provider, boolean healthy) {}
+    
+    @Override
+    public List<LlmProvider> getProviders() {
+        return providers;
+    }
 }

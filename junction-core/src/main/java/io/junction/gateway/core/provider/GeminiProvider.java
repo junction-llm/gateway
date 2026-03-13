@@ -148,6 +148,14 @@ public final class GeminiProvider implements LlmProvider {
     }
     
     @Override
+    public List<ModelInfo> getAvailableModels() {
+        if (model != null && !model.isBlank()) {
+            return List.of(ModelInfo.of(model, Map.of("owned_by", "google")));
+        }
+        return List.of();
+    }
+    
+    @Override
     public Gatherer<ProviderResponse, ?, ChatCompletionChunk> responseAdapter() {
         return new io.junction.gateway.core.gatherer.OpenAIAdapterGatherer(model);
     }

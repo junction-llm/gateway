@@ -31,6 +31,10 @@ class ApiKeyValidatorTest {
         assertFalse(result.valid());
         assertEquals(ApiKeyValidator.ValidationError.MISSING_KEY, result.error());
         assertEquals(401, result.httpStatus());
+        assertEquals(
+            "API key is required. Provide it in the X-API-Key header or Authorization: Bearer header.",
+            result.errorMessage()
+        );
     }
 
     @Test

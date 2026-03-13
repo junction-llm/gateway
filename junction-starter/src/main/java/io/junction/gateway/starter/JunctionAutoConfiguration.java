@@ -1,5 +1,6 @@
 package io.junction.gateway.starter;
 
+import io.junction.gateway.core.cache.ModelCacheService;
 import io.junction.gateway.core.provider.GeminiProvider;
 import io.junction.gateway.core.provider.OllamaProvider;
 import io.junction.gateway.core.router.RoundRobinRouter;
@@ -72,6 +73,12 @@ public class JunctionAutoConfiguration {
         }
         
         return new RoundRobinRouter(providers);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(ModelCacheService.class)
+    public ModelCacheService modelCacheService() {
+        return new ModelCacheService();
     }
     
     
@@ -146,7 +153,8 @@ public class JunctionAutoConfiguration {
                                                ClientCompatibilityService clientCompatService,
                                                ApiKeyValidator apiKeyValidator,
                                                IpRateLimiter ipRateLimiter,
-                                               JunctionProperties junctionProperties) {
-        return new GatewayController(router, jsonMapper, clientCompatService, apiKeyValidator, ipRateLimiter, junctionProperties);
+                                               JunctionProperties junctionProperties,
+                                               ModelCacheService modelCacheService) {
+        return new GatewayController(router, jsonMapper, clientCompatService, apiKeyValidator, ipRateLimiter, junctionProperties, modelCacheService);
     }
 }
