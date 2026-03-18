@@ -24,7 +24,9 @@ import tools.jackson.databind.ObjectMapper;
 
 public final class OllamaProvider implements LlmProvider {
     private static final Logger log = LoggerFactory.getLogger(OllamaProvider.class);
+    private static final Logger payloadLog = LoggerFactory.getLogger("io.junction.gateway.payload.ollama");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int CONSOLE_MESSAGE_PREVIEW_LIMIT = 300;
     private final HttpClient client;
     private final String baseUrl;
     private final String defaultModel;
@@ -99,6 +101,12 @@ public final class OllamaProvider implements LlmProvider {
         if (log.isDebugEnabled()) {
             log.debug("[{}] Sending request to Ollama at {} (messages={}, image_inputs={})",
                 traceId, baseUrl, messagesPayload.size(), hasImageInputs);
+            log.debug("[{}] Request message preview: {}", traceId, buildDebugMessages(request.messages(), true));
+        }
+
+        if (payloadLog.isDebugEnabled()) {
+            payloadLog.debug("[{}] Request messages (text-only, image payload omitted): {}", traceId,
+                buildDebugMessages(request.messages(), false));
         }
             
         log.debug("[{}] Request target model: {}", traceId, model);
@@ -190,6 +198,43 @@ public final class OllamaProvider implements LlmProvider {
         } catch (Exception e) {
             throw new ProviderException("Failed to serialize Ollama request", 500);
         }
+    }
+
+    private String buildDebugMessages(List<ChatCompletionRequest.Message> messages, boolean truncate) {
+        if (messages == null || messages.isEmpty()) {
+            return "[]";
+        }
+
+        return messages.stream()
+            .map(message -> describeMessageForLog(message, truncate))
+            .toList()
+            .toString();
+    }
+    
+    private String describeMessageForLog(ChatCompletionRequest.Message message, boolean truncate) {
+        if (message == null) {
+            return "[message=<null>]";
+        }
+        
+        var role = message.role() != null ? message.role() : "<unknown>";
+        var content = message.getTextContent();
+        if (content == null) {
+            content = "";
+        }
+
+        content = sanitizeText(content, truncate ? CONSOLE_MESSAGE_PREVIEW_LIMIT : Integer.MAX_VALUE);
+        var imageCount = message.imageUrls().size();
+        var imageInfo = imageCount > 0 ? ", images=" + imageCount + " (omitted)" : "";
+        return "[role=%s, content=%s%s]".formatted(role, content.isBlank() ? "<empty>" : content, imageInfo);
+    }
+    
+    private String sanitizeText(String text, int maxLength) {
+        var oneLine = text.replace('\n', ' ').replace('\r', ' ');
+        if (maxLength == Integer.MAX_VALUE || oneLine.length() <= maxLength) {
+            return oneLine;
+        }
+
+        return oneLine.substring(0, maxLength) + "...";
     }
 
     private Stream<ProviderResponse> parseNdJson(java.io.InputStream is, java.util.UUID traceId) {
