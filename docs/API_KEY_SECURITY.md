@@ -1,13 +1,13 @@
 # API Key Security
 
-> Version: `0.0.2`  
+> Version: `0.0.3`  
 > Status: Available in the current public release
 
 ## Overview
 
-Junction Gateway includes API key validation for the protected chat completions and model listing endpoints.
+Junction Gateway includes API key validation for the protected chat completions, embeddings, and model listing endpoints.
 
-Supported in `0.0.2`:
+Supported in `0.0.3`:
 - In-memory API key storage
 - SHA-256 hashed key storage
 - Authentication via `X-API-Key` or `Authorization: Bearer`
@@ -16,7 +16,7 @@ Supported in `0.0.2`:
 - Optional per-key model restrictions
 - OpenAI-style error responses
 
-Not yet implemented in `0.0.2`:
+Not yet implemented in `0.0.3`:
 - File-backed API key storage
 - H2-backed API key storage
 - PostgreSQL-backed API key storage
@@ -38,7 +38,7 @@ junction:
 
 ## Using the API
 
-Both protected endpoints accept API keys via `X-API-Key` or `Authorization: Bearer`.
+All protected endpoints accept API keys via `X-API-Key` or `Authorization: Bearer`.
 
 Chat completions:
 
@@ -58,6 +58,19 @@ Model listing:
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer ${JUNCTION_API_KEY_1}"
+```
+
+Embeddings:
+
+```bash
+curl -X POST http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${JUNCTION_API_KEY_1}" \
+  -d '{
+    "model": "embeddinggemma",
+    "input": ["Hello", "How are you?"],
+    "encoding_format": "base64"
+  }'
 ```
 
 ## Key Format
@@ -80,7 +93,7 @@ junc_aB3dE5fG7hI9jK1lM2nO3pQ4rS5tU6vW7xY8zA0
 
 ## Current Storage Model
 
-`0.0.2` uses the in-memory repository by default.
+`0.0.3` uses the in-memory repository by default.
 
 Implications:
 - keys are lost on restart

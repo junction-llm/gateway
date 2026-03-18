@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.3 - 2026-03-17
+
+Added endpoint and multimodal support with stronger request validation.
+
+### Added
+
+- OpenAI-compatible `POST /v1/embeddings`
+- Embedding request model and deserializer support for string or array string inputs
+- Optional embeddings `encoding_format` support for `float` and `base64`
+- Image input support in `ChatCompletionRequest` via `image_url` message parts
+- Image payload routing to providers that support image inputs
+- Dedicated Ollama payload logger (`io.junction.gateway.payload.ollama`) for detailed request logging
+
+### Changed
+
+- Router now supports capability-based selection for image-capable and embedding-capable providers
+- Ollama chat payload construction now normalizes image sources (`data:` URIs and remote URLs)
+- Expanded integration and deserialization error coverage for unsupported request types
+
+### Known Limitations
+
+- Embeddings are supported only by Ollama in this release
+- `dimensions` is not supported for embeddings
+- Gemini adapter does not support embeddings
+
 ## 0.0.2 - 2026-03-13
 
 Expanded the public gateway surface and authentication compatibility.

@@ -10,10 +10,17 @@ public sealed interface LlmProvider permits
     OllamaProvider {
     String providerId();
     boolean isHealthy();
+    boolean supportsEmbeddings();
     
     Gatherer<ProviderResponse, ?, ChatCompletionChunk> responseAdapter();
     
     Stream<ProviderResponse> execute(ChatCompletionRequest request);
+
+    default boolean supportsImageInputs() {
+        return false;
+    }
+
+    EmbeddingResponse embed(EmbeddingRequest request);
     
     default ChatCompletionChunk complete(ChatCompletionRequest request) {
         return execute(request)
@@ -22,6 +29,14 @@ public sealed interface LlmProvider permits
             .orElseThrow();
     }
     
+    /**
+     * Returns a list of available models from this provider.
+     * 
+     * <p>Default implementation returns empty list. Providers should override
+     * this method to expose their available models.
+     * 
+     * @return list of available models, or empty list if not supported
+     */
     default List<ModelInfo> getAvailableModels() {
         return List.of();
     }

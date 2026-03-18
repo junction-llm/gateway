@@ -1,5 +1,6 @@
 package io.junction.gateway.core.model;
 
+import java.util.Objects;
 import java.util.List;
 
 public record ChatCompletionRequest(
@@ -31,6 +32,30 @@ public record ChatCompletionRequest(
     ) {
         public Message(String role, String content) {
             this(role, List.of(ContentPart.text(content)));
+        }
+
+        public boolean hasImageParts() {
+            return content != null
+                && content.stream().anyMatch(part -> "image_url".equals(part.type())
+                    && part.imageUrl() != null
+                    && part.imageUrl().url() != null
+                    && !part.imageUrl().url().isBlank());
+        }
+
+        public List<String> imageUrls() {
+            if (content == null || content.isEmpty()) {
+                return List.of();
+            }
+
+            return content.stream()
+                .filter(part -> "image_url".equals(part.type())
+                    && part.imageUrl() != null
+                    && part.imageUrl().url() != null)
+                .map(part -> part.imageUrl().url())
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(url -> !url.isBlank())
+                .toList();
         }
         
         public String getTextContent() {

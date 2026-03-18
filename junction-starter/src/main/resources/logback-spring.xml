@@ -20,6 +20,10 @@
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="PER_REQUEST"/>
     </logger>
+
+    <logger name="io.junction.gateway.payload.ollama" level="DEBUG" additivity="false">
+        <appender-ref ref="PER_REQUEST"/>
+    </logger>
     
     <logger name="org.springframework" level="INFO"/>
     <logger name="org.springframework.web" level="INFO"/>
