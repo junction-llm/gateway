@@ -6,26 +6,30 @@ Junction is an OpenAI-compatible LLM gateway for the JVM. It exposes `/v1/chat/c
 
 ## Status
 
-`v0.0.2` is the current public release.
+`v0.0.3` is the current public release.
 
-What is ready in `0.0.2`:
+What is ready in `v0.0.3`:
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-compatible `GET /v1/models`
+- OpenAI-compatible `POST /v1/embeddings`
 - Streaming and non-streaming responses
 - Ollama provider support
 - Gemini provider support
 - Round-robin routing across healthy providers
 - API key validation via `X-API-Key` or `Authorization: Bearer`
 - Tier-based rate limiting (FREE, PRO, ENTERPRISE)
+- Image-capable chat request routing and Ollama multimodal payload handling
 - IP rate limiting and optional IP allowlisting with CIDR support
 - Client compatibility adapters for Cline and Roo Code
+- Optional `base64` embeddings output for `/v1/embeddings`
 - Per-request log files
 - Spring Boot starter auto-configuration
 
-What is not in `0.0.2`:
+What is not in `v0.0.3`:
 - Persistent API key storage backends beyond in-memory
 - Advanced routing strategies beyond round-robin
-- Full OpenAI API surface outside chat completions
+- `dimensions` support for `/v1/embeddings`
+- Full OpenAI API surface outside chat, models, and embeddings
 - Metrics, tracing, and admin APIs
 
 ## Requirements
@@ -41,7 +45,7 @@ What is not in `0.0.2`:
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Ollama | Supported | Best-tested path for `0.0.2` |
+| Ollama | Supported | Best-tested path for `0.0.3` |
 | Gemini | Supported | Optional, requires `GEMINI_API_KEY` |
 
 ## Quick Start
@@ -97,6 +101,28 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   }'
 ```
 
+Multimodal (image) request:
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -H "X-API-Key: ${JUNCTION_API_KEY_1}" \
+  -d '{
+    "model": "qwen3.5",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "What do you see in this image?"},
+          {"type": "image_url", "image_url": {"url": "https://example.com/example.png"}}
+        ]
+      }
+    ],
+    "stream": false
+  }'
+```
+
 Model listing:
 
 ```bash
@@ -104,6 +130,57 @@ curl http://localhost:8080/v1/models \
   -H "Accept: application/json" \
   -H "Authorization: Bearer ${JUNCTION_API_KEY_1}"
 ```
+
+Embeddings:
+
+```bash
+curl -X POST http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -H "X-API-Key: ${JUNCTION_API_KEY_1}" \
+  -d '{
+    "model": "embeddinggemma",
+    "input": ["Hello world", "OpenAI-compatible embeddings"]
+  }'
+```
+
+```bash
+curl -X POST http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -H "X-API-Key: ${JUNCTION_API_KEY_1}" \
+  -d '{
+    "model": "embeddinggemma",
+    "input": "Hello world",
+    "encoding_format": "base64"
+  }'
+```
+
+Expected JSON shape (float):
+
+```json
+{
+  "object": "list",
+  "data": [{"object":"embedding","embedding":[0.1,0.2,0.3],"index":0}],
+  "model": "embeddinggemma",
+  "usage": {"prompt_tokens": 12, "total_tokens": 12}
+}
+```
+
+## Request Formats
+
+Chat completions:
+
+- `messages` may be a string per message (legacy style) or an array of parts.
+- Multimodal inputs use `type: "image_url"` entries with an `image_url.url` string.
+- `image_url` sources can be `data:` URLs (Base64 payload required) or `http(s)` URLs.
+
+Embeddings:
+
+- `POST /v1/embeddings` requires `model` and `input`.
+- `input` accepts a string or an array of strings.
+- Optional `encoding_format` supports `float` (default) and `base64`.
+- `dimensions` is currently unsupported and will return an `invalid_request`.
 
 ## Configuration
 
@@ -122,7 +199,7 @@ Important settings:
 ## Production Notes
 
 - The sample application is a demo and reference app, not a managed production distribution.
-- API keys are stored in-memory in `0.0.2`.
+- API keys are stored in-memory in `0.0.3`.
 - The deployment files in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`Caddyfile`](Caddyfile), and [`docker-compose.caddy.yml`](docker-compose.caddy.yml) are example assets and should be customized before public deployment.
 - Per-request logs are written under `junction-samples/logs/`.
 
@@ -135,13 +212,13 @@ Important settings:
 
 ## Compatibility Matrix
 
-| Area | `0.0.2` |
+| Area | `0.0.3` |
 |------|---------|
 | Java runtime | Java 25 |
 | Build tool | Maven reactor |
 | Web stack | Spring MVC on Spring Boot 4 |
 | Streaming | SSE via `SseEmitter` |
-| Request formats | OpenAI-compatible chat completion payloads with text and multimodal message parsing |
+| Request formats | OpenAI-compatible chat completion payloads with multimodal parsing and `/v1/embeddings` requests |
 
 ## License
 
