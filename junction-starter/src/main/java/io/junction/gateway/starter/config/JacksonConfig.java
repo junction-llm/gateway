@@ -4,6 +4,8 @@ import tools.jackson.databind.module.SimpleModule;
 import tools.jackson.databind.json.JsonMapper;
 import io.junction.gateway.core.model.ChatCompletionRequest;
 import io.junction.gateway.core.model.ChatCompletionRequestDeserializer;
+import io.junction.gateway.core.model.EmbeddingRequest;
+import io.junction.gateway.core.model.EmbeddingRequestDeserializer;
 import io.junction.gateway.core.model.MessageDeserializer;
 import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -28,6 +30,7 @@ public class JacksonConfig {
         SimpleModule module = new SimpleModule("ChatCompletionModule");
         module.addDeserializer(ChatCompletionRequest.class, new ChatCompletionRequestDeserializer());
         module.addDeserializer(ChatCompletionRequest.Message.class, new MessageDeserializer());
+        module.addDeserializer(EmbeddingRequest.class, new EmbeddingRequestDeserializer());
         return module;
     }
     
@@ -44,4 +47,3 @@ public class JacksonConfig {
             );
     }
 }
-

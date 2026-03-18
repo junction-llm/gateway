@@ -113,6 +113,30 @@ class GatewayAuthenticationIntegrationTest {
     }
 
     @Test
+    void returnsEmbeddingsWithBearerAuth() throws Exception {
+        backend.setEmbeddingResponse("""
+            {"model":"embeddinggemma","embeddings":[[0.1,0.2,0.3]],"prompt_eval_count":9}
+            """);
+
+        mockMvc.perform(post("/v1/embeddings")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.AUTHORIZATION, bearer(VALID_API_KEY))
+                .content("""
+                    {
+                      "model": "embeddinggemma",
+                      "input": "Hello"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.object").value("list"))
+            .andExpect(jsonPath("$.model").value("embeddinggemma"))
+            .andExpect(jsonPath("$.data[0].embedding[0]").value(0.1))
+            .andExpect(jsonPath("$.usage.prompt_tokens").value(9));
+    }
+
+    @Test
     void listsModelsWithBearerAuth() throws Exception {
         backend.setTagsResponse("""
             {"models":[{"name":"test-model"}]}
@@ -228,6 +252,9 @@ class GatewayAuthenticationIntegrationTest {
             {"model":"test-model","message":{"content":"Hello"},"done":false}
             {"model":"test-model","message":{"content":" world"},"done":true}
             """);
+        private final AtomicReference<String> embeddingResponse = new AtomicReference<>("""
+            {"model":"embeddinggemma","embeddings":[[0.1,0.2,0.3]],"prompt_eval_count":9}
+            """);
         private final AtomicReference<String> tagsResponse = new AtomicReference<>("""
             {"models":[{"name":"test-model"}]}
             """);
@@ -240,6 +267,7 @@ class GatewayAuthenticationIntegrationTest {
                 server = HttpServer.create(new InetSocketAddress(0), 0);
                 server.createContext("/api/tags", this::handleTags);
                 server.createContext("/api/chat", this::handleChat);
+                server.createContext("/api/embed", this::handleEmbed);
                 server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
                 server.start();
             } catch (IOException e) {
@@ -266,6 +294,10 @@ class GatewayAuthenticationIntegrationTest {
             tagsResponse.set(responseBody);
         }
 
+        void setEmbeddingResponse(String responseBody) {
+            embeddingResponse.set(responseBody);
+        }
+
         private void handleTags(HttpExchange exchange) throws IOException {
             byte[] response = tagsResponse.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -278,6 +310,15 @@ class GatewayAuthenticationIntegrationTest {
         private void handleChat(HttpExchange exchange) throws IOException {
             byte[] response = chatResponse.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/x-ndjson");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream outputStream = exchange.getResponseBody()) {
+                outputStream.write(response);
+            }
+        }
+
+        private void handleEmbed(HttpExchange exchange) throws IOException {
+            byte[] response = embeddingResponse.get().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
             try (OutputStream outputStream = exchange.getResponseBody()) {
                 outputStream.write(response);

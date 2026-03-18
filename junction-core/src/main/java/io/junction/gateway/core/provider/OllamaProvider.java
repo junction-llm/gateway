@@ -1,6 +1,7 @@
 package io.junction.gateway.core.provider;
 
 import io.junction.gateway.core.context.RequestContext;
+import io.junction.gateway.core.exception.ProviderException;
 import io.junction.gateway.core.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +53,11 @@ public final class OllamaProvider implements LlmProvider {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    @Override
+    public boolean supportsEmbeddings() {
+        return true;
     }
     
     @Override
@@ -115,6 +121,45 @@ public final class OllamaProvider implements LlmProvider {
         } catch (Exception e) {
             log.error("[{}] Unexpected error calling Ollama: {}", traceId, e.getMessage(), e);
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama error: " + e.getMessage(), 500));
+        }
+    }
+
+    @Override
+    public EmbeddingResponse embed(EmbeddingRequest request) {
+        var traceId = RequestContext.Context.current().traceId();
+        var model = request.model();
+
+        if (model == null || model.isBlank()) {
+            throw new ProviderException("Embeddings request requires a model.", 400);
+        }
+
+        var httpReq = HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/embed"))
+            .header("Content-Type", "application/json")
+            .header("X-Trace-ID", traceId.toString())
+            .POST(HttpRequest.BodyPublishers.ofString(serializeEmbeddingRequest(request)))
+            .build();
+
+        try {
+            log.info("[{}] OllamaProvider embedding request: model={}, inputs={}",
+                traceId, model, request.input().size());
+
+            var response = client.send(httpReq, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new ProviderException(
+                    "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
+                    response.statusCode()
+                );
+            }
+
+            return parseEmbeddingResponse(response.body(), model, request.encodingFormat(), traceId);
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new ProviderException("Ollama embeddings timeout: " + e.getMessage(), 504);
+        } catch (java.io.IOException e) {
+            throw new ProviderException("Ollama embeddings connection error: " + e.getMessage(), 502);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProviderException("Embeddings request interrupted", 500);
         }
     }
     
@@ -252,6 +297,60 @@ public final class OllamaProvider implements LlmProvider {
     @Override
     public Gatherer<ProviderResponse, ?, ChatCompletionChunk> responseAdapter() {
         return new io.junction.gateway.core.gatherer.OpenAIAdapterGatherer(defaultModel);
+    }
+
+    private String serializeEmbeddingRequest(EmbeddingRequest request) {
+        Object inputPayload = request.input().size() == 1
+            ? request.input().get(0)
+            : request.input();
+
+        try {
+            return new ObjectMapper().writeValueAsString(Map.of(
+                "model", request.model(),
+                "input", inputPayload
+            ));
+        } catch (Exception e) {
+            throw new ProviderException("Failed to serialize Ollama embeddings request", 500);
+        }
+    }
+
+    private EmbeddingResponse parseEmbeddingResponse(String body,
+                                                     String requestedModel,
+                                                     String encodingFormat,
+                                                     java.util.UUID traceId) {
+        try {
+            JsonNode rootNode = new ObjectMapper().readTree(body);
+            JsonNode embeddingsNode = rootNode.path("embeddings");
+            if (!embeddingsNode.isArray()) {
+                throw new ProviderException("Ollama embeddings response missing 'embeddings' array.", 502);
+            }
+
+            List<List<Double>> embeddings = new ArrayList<>();
+            for (JsonNode embeddingNode : embeddingsNode) {
+                if (!embeddingNode.isArray()) {
+                    throw new ProviderException("Ollama returned an invalid embedding vector.", 502);
+                }
+
+                List<Double> vector = new ArrayList<>();
+                for (JsonNode valueNode : embeddingNode) {
+                    if (!valueNode.isNumber()) {
+                        throw new ProviderException("Ollama returned a non-numeric embedding value.", 502);
+                    }
+                    vector.add(valueNode.asDouble());
+                }
+                embeddings.add(List.copyOf(vector));
+            }
+
+            int promptTokens = rootNode.path("prompt_eval_count").asInt(0);
+            String responseModel = rootNode.path("model").asText(requestedModel);
+
+            log.debug("[{}] Parsed {} embedding vectors from Ollama", traceId, embeddings.size());
+            return EmbeddingResponse.of(responseModel, embeddings, promptTokens, encodingFormat);
+        } catch (ProviderException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProviderException("Failed to parse Ollama embeddings response: " + e.getMessage(), 502);
+        }
     }
     
     private String formatMessages(List<ChatCompletionRequest.Message> messages) {

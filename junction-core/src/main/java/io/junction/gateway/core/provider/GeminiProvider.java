@@ -35,6 +35,11 @@ public final class GeminiProvider implements LlmProvider {
     public boolean isHealthy() {
         return apiKey != null && !apiKey.isEmpty();
     }
+
+    @Override
+    public boolean supportsEmbeddings() {
+        return false;
+    }
     
     @Override
     public Stream<ProviderResponse> execute(ChatCompletionRequest request) {
@@ -64,6 +69,11 @@ public final class GeminiProvider implements LlmProvider {
         } catch (Exception e) {
             return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), 500));
         }
+    }
+
+    @Override
+    public EmbeddingResponse embed(EmbeddingRequest request) {
+        throw new UnsupportedOperationException("Gemini embeddings are not supported in this release.");
     }
     
     private Stream<ProviderResponse> parseGeminiStream(java.io.InputStream is) {

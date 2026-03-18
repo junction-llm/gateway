@@ -21,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.json.JsonMapper;
@@ -177,6 +178,44 @@ public class GatewayController {
             log.error("[{}] Error processing non-streaming request", traceId, e);
             throw e;
         }
+    }
+
+    @PostMapping(value = "/embeddings", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<EmbeddingResponse> embeddings(
+            @RequestBody EmbeddingRequest request,
+            @RequestHeader(value = "Accept", required = false) String acceptHeader,
+            @RequestHeader(value = "User-Agent", required = false) String userAgent,
+            HttpServletRequest httpServletRequest) {
+
+        var traceId = java.util.UUID.randomUUID();
+        var resolvedApiKey = resolveApiKey(httpServletRequest);
+
+        var ctx = new RequestContext.Context(
+            traceId,
+            resolvedApiKey.apiKey(),
+            request.model(),
+            java.time.Instant.now()
+        );
+
+        ApiKeyValidator.ValidationResult validation;
+        try (var ignored = MDC.putCloseable("traceId", traceId.toString())) {
+            ScopedValue.where(RequestContext.key(), ctx).run(() -> {
+                logEmbeddingRequestDetails(request, resolvedApiKey, acceptHeader, userAgent, httpServletRequest, traceId);
+            });
+
+            validation = ScopedValue.where(RequestContext.key(), ctx).call(() -> {
+                return validateApiKey(resolvedApiKey.apiKey(), httpServletRequest, request.model());
+            });
+        }
+
+        if (!validation.valid()) {
+            throw new ApiKeyAuthenticationException(validation);
+        }
+
+        EmbeddingResponse response = createEmbeddingResponse(request, traceId, ctx);
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(response);
     }
     
     /**
@@ -369,8 +408,30 @@ public class GatewayController {
         log.info("[{}] User-Agent Header: {}", traceId, userAgent);
         log.info("[{}] Authentication Source: {}", traceId, resolvedApiKey.source());
         log.info("[{}] === ===", traceId);
-        
-        
+
+        logHeaderDetails(httpServletRequest);
+    }
+
+    private void logEmbeddingRequestDetails(EmbeddingRequest request, ResolvedApiKey resolvedApiKey, String acceptHeader,
+                                            String userAgent, HttpServletRequest httpServletRequest, java.util.UUID traceId) {
+        log.info("[{}] === INCOMING REQUEST [EMBEDDINGS] ===", traceId);
+        log.info("[{}] Client IP: {}", traceId, getClientIp(httpServletRequest));
+        log.info("[{}] Request URI: {} {}", traceId, httpServletRequest.getMethod(), httpServletRequest.getRequestURI());
+        log.info("[{}] Request Query String: {}", traceId, httpServletRequest.getQueryString());
+        log.info("[{}] Request Model: {}", traceId, request.model());
+        log.info("[{}] Request Input Count: {}", traceId, request.input() != null ? request.input().size() : "null");
+        log.info("[{}] Request Encoding Format: {}", traceId, request.encodingFormat());
+        log.info("[{}] Request Dimensions: {}", traceId, request.dimensions());
+        log.info("[{}] Request User Present: {}", traceId, request.user() != null && !request.user().isBlank());
+        log.info("[{}] Accept Header: {}", traceId, acceptHeader);
+        log.info("[{}] User-Agent Header: {}", traceId, userAgent);
+        log.info("[{}] Authentication Source: {}", traceId, resolvedApiKey.source());
+        log.info("[{}] === ===", traceId);
+
+        logHeaderDetails(httpServletRequest);
+    }
+
+    private void logHeaderDetails(HttpServletRequest httpServletRequest) {
         log.debug("=== CLIENT DETECTION HEADERS ===");
         String[] clientHeaders = {
             "x-client-name",
@@ -561,6 +622,46 @@ public class GatewayController {
         }
     }
 
+    private EmbeddingResponse createEmbeddingResponse(EmbeddingRequest request,
+                                                      java.util.UUID traceId,
+                                                      RequestContext.Context ctx) {
+        try (var ignored = MDC.putCloseable("traceId", traceId.toString())) {
+            return ScopedValue.where(RequestContext.key(), ctx).call(() -> {
+                validateEmbeddingRequest(request);
+
+                log.info("[{}] Routing embeddings request", traceId);
+                var provider = router.route(request);
+                log.info("[{}] Routed embeddings to provider: {}", traceId, provider.providerId());
+
+                var response = provider.embed(request);
+                log.debug("[{}] Returning embeddings response with {} vectors", traceId, response.data().size());
+                return response;
+            });
+        }
+    }
+
+    private void validateEmbeddingRequest(EmbeddingRequest request) {
+        if (request.model() == null || request.model().isBlank()) {
+            throw new RouterException("Embeddings request requires a non-blank 'model'.");
+        }
+
+        if (request.input() == null || request.input().isEmpty()) {
+            throw new RouterException(
+                "Embeddings request requires 'input' as a string or a non-empty array of strings."
+            );
+        }
+
+        if (request.encodingFormat() != null
+            && !"float".equals(request.encodingFormat())
+            && !"base64".equals(request.encodingFormat())) {
+            throw new RouterException("Only 'float' and 'base64' encoding_format values are supported for embeddings.");
+        }
+
+        if (request.dimensions() != null) {
+            throw new RouterException("'dimensions' is not supported for embeddings.");
+        }
+    }
+
     private String redactHeaderValue(String headerName, String value) {
         if (value == null) {
             return null;
@@ -674,6 +775,19 @@ public class GatewayController {
         log.error("RouterException: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(new ErrorResponse(e.getMessage(), "invalid_request", 400));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException e) {
+        String message = "Invalid request body.";
+        Throwable cause = e.getMostSpecificCause();
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().isBlank()) {
+            message = cause.getMessage();
+        }
+
+        log.warn("Invalid request body: {}", message);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(new ErrorResponse(message, "invalid_request", 400));
     }
     
     @ExceptionHandler(Exception.class)
