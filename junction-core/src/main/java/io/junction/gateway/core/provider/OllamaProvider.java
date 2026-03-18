@@ -11,18 +11,20 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 public final class OllamaProvider implements LlmProvider {
     private static final Logger log = LoggerFactory.getLogger(OllamaProvider.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final HttpClient client;
     private final String baseUrl;
     private final String defaultModel;
@@ -61,29 +63,45 @@ public final class OllamaProvider implements LlmProvider {
     }
     
     @Override
+    public boolean supportsImageInputs() {
+        return true;
+    }
+    
+    @Override
     public Stream<ProviderResponse> execute(ChatCompletionRequest request) {
         var traceId = RequestContext.Context.current().traceId();
         
         var model = request.model() != null ? request.model() : defaultModel;
-        var messagesJson = formatMessages(request.messages());
+        var messagesPayload = formatMessages(request.messages());
         var stream = request.stream();
         var temp = request.temperature() != null ? request.temperature() : 0.3;
         
-        log.info("[{}] OllamaProvider executing request: model={}, stream={}, temp={}", 
-                traceId, model, stream, temp);
+        var hasImageInputs = request.messages() != null
+            && request.messages().stream().anyMatch(ChatCompletionRequest.Message::hasImageParts);
         
-        var json = """
-            {
-                "model": "%s",
-                "messages": %s,
-                "stream": %s,
-                "options": {
-                    "temperature": %s
-                }
-            }
-            """.formatted(model, messagesJson, stream, temp);
+        log.info("[{}] OllamaProvider executing request: model={}, stream={}, temp={}, image_inputs={}", 
+                traceId, model, stream, temp, hasImageInputs);
         
-        log.debug("[{}] Request body: {}", traceId, json);
+        var requestBody = Map.<String, Object>of(
+            "model", model,
+            "messages", messagesPayload,
+            "stream", stream,
+            "options", Map.of("temperature", temp)
+        );
+        
+        String json;
+        try {
+            json = serializeRequestBody(requestBody);
+        } catch (ProviderException e) {
+            return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
+        }
+        
+        if (log.isDebugEnabled()) {
+            log.debug("[{}] Sending request to Ollama at {} (messages={}, image_inputs={})",
+                traceId, baseUrl, messagesPayload.size(), hasImageInputs);
+        }
+            
+        log.debug("[{}] Request target model: {}", traceId, model);
         
         var httpReq = HttpRequest.newBuilder()
             .uri(URI.create(baseUrl + "/api/chat"))
@@ -91,7 +109,7 @@ public final class OllamaProvider implements LlmProvider {
             .header("X-Trace-ID", traceId.toString())
             .POST(HttpRequest.BodyPublishers.ofString(json))
             .build();
-            
+
         try {
             log.debug("[{}] Sending request to Ollama at: {}", traceId, baseUrl);
             var response = client.send(httpReq, HttpResponse.BodyHandlers.ofInputStream());
@@ -118,6 +136,9 @@ public final class OllamaProvider implements LlmProvider {
             Thread.currentThread().interrupt();
             log.error("[{}] Request interrupted: {}", traceId, e.getMessage());
             return Stream.of(new ProviderResponse.ErrorResponse("Request interrupted", 500));
+        } catch (ProviderException e) {
+            log.error("[{}] Invalid Ollama request: {}", traceId, e.getMessage());
+            return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
         } catch (Exception e) {
             log.error("[{}] Unexpected error calling Ollama: {}", traceId, e.getMessage(), e);
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama error: " + e.getMessage(), 500));
@@ -163,6 +184,14 @@ public final class OllamaProvider implements LlmProvider {
         }
     }
     
+    private String serializeRequestBody(Map<String, Object> requestBody) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(requestBody);
+        } catch (Exception e) {
+            throw new ProviderException("Failed to serialize Ollama request", 500);
+        }
+    }
+
     private Stream<ProviderResponse> parseNdJson(java.io.InputStream is, java.util.UUID traceId) {
         final java.util.concurrent.atomic.AtomicInteger chunkCounter = new java.util.concurrent.atomic.AtomicInteger(0);
         
@@ -353,59 +382,92 @@ public final class OllamaProvider implements LlmProvider {
         }
     }
     
-    private String formatMessages(List<ChatCompletionRequest.Message> messages) {
-        var sb = new StringBuilder("[");
-        for (int i = 0; i < messages.size(); i++) {
-            var m = messages.get(i);
-            if (i > 0) sb.append(",");
-            sb.append(String.format(
-                "{\"role\": \"%s\", \"content\": \"%s\"}",
-                m.role(),
-                escapeJson(m.getTextContent())
-            ));
-        }
-        sb.append("]");
-        return sb.toString();
+    private List<Map<String, Object>> formatMessages(List<ChatCompletionRequest.Message> messages) {
+        if (messages == null || messages.isEmpty()) return List.of();
+
+        return messages.stream()
+            .map(message -> {
+                Map<String, Object> mappedMessage = new HashMap<>();
+                mappedMessage.put("role", message.role());
+                mappedMessage.put("content", message.getTextContent());
+                
+                List<String> imagePayloads = message.imageUrls().stream()
+                    .map(this::normalizeImageInput)
+                    .toList();
+                
+                if (!imagePayloads.isEmpty()) {
+                    mappedMessage.put("images", imagePayloads);
+                }
+                
+                return mappedMessage;
+            })
+            .toList();
     }
     
-    private String escapeJson(String s) {
-        if (s == null) {
-            return "";
+    private String normalizeImageInput(String imageSource) {
+        if (imageSource == null || imageSource.isBlank()) {
+            throw new ProviderException("Image source cannot be blank.", 400);
+        }
+
+        if (imageSource.startsWith("data:")) {
+            return normalizeDataUrlImage(imageSource);
         }
         
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"':
-                    sb.append("\\\"");
-                    break;
-                case '\\':
-                    sb.append("\\\\");
-                    break;
-                case '\b':
-                    sb.append("\\b");
-                    break;
-                case '\f':
-                    sb.append("\\f");
-                    break;
-                case '\n':
-                    sb.append("\\n");
-                    break;
-                case '\r':
-                    sb.append("\\r");
-                    break;
-                case '\t':
-                    sb.append("\\t");
-                    break;
-                default:
-                    if (c < ' ') {
-                        sb.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        sb.append(c);
-                    }
-            }
+        if (imageSource.startsWith("http://") || imageSource.startsWith("https://")) {
+            return loadImageFromUrl(imageSource);
         }
-        return sb.toString();
+
+        throw new ProviderException("Unsupported image source scheme: " + imageSource, 400);
     }
+    
+    private String normalizeDataUrlImage(String dataUrl) {
+        var commaIndex = dataUrl.indexOf(',');
+        if (commaIndex < 0 || commaIndex == dataUrl.length() - 1) {
+            throw new ProviderException("Invalid data URL image format: missing base64 payload.", 400);
+        }
+        
+        var metadata = dataUrl.substring(0, commaIndex).toLowerCase();
+        var base64Payload = dataUrl.substring(commaIndex + 1);
+        
+        if (!metadata.contains(";base64")) {
+            throw new ProviderException("Only base64 data URLs are supported for images.", 400);
+        }
+        
+        try {
+            Base64.getDecoder().decode(base64Payload);
+            return base64Payload;
+        } catch (IllegalArgumentException e) {
+            throw new ProviderException("Invalid base64 payload in image data URL.", 400);
+        }
+    }
+    
+    private String loadImageFromUrl(String imageUrl) {
+        try {
+            var request = HttpRequest.newBuilder()
+                .uri(URI.create(imageUrl))
+                .timeout(Duration.ofSeconds(8))
+                .GET()
+                .build();
+            
+            var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() != 200) {
+                throw new ProviderException("Failed to load image from URL: HTTP " + response.statusCode(), 400);
+            }
+
+            var imageBytes = response.body();
+            if (imageBytes == null || imageBytes.length == 0) {
+                throw new ProviderException("Image URL returned no content.", 400);
+            }
+            
+            return Base64.getEncoder().encodeToString(imageBytes);
+        } catch (ProviderException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProviderException("Interrupted while loading image URL.", 500);
+        } catch (Exception e) {
+            throw new ProviderException("Failed to load image from URL: " + e.getMessage(), 400);
+        }
+    }
+    
 }

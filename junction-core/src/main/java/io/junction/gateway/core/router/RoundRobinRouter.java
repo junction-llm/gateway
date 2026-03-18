@@ -24,7 +24,11 @@ public class RoundRobinRouter implements Router {
     
     @Override
     public LlmProvider route(ChatCompletionRequest request) {
-        return routeAvailableProviders(provider -> true);
+        var requestHasImageInputs = request != null
+            && request.messages() != null
+            && request.messages().stream().anyMatch(ChatCompletionRequest.Message::hasImageParts);
+
+        return routeAvailableProviders(requestHasImageInputs ? LlmProvider::supportsImageInputs : provider -> true);
     }
 
     @Override

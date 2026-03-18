@@ -16,6 +16,10 @@ public sealed interface LlmProvider permits
     
     Stream<ProviderResponse> execute(ChatCompletionRequest request);
 
+    default boolean supportsImageInputs() {
+        return false;
+    }
+
     EmbeddingResponse embed(EmbeddingRequest request);
     
     default ChatCompletionChunk complete(ChatCompletionRequest request) {
