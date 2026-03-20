@@ -1,0 +1,7 @@
+junction:
+  security:
+    api-key:
+      storage: postgresql
+      postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
+      postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
+      postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:junction}

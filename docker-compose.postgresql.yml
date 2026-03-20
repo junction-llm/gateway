@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: junction-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: junction
+      POSTGRES_USER: junction
+      POSTGRES_PASSWORD: ${JUNCTION_POSTGRES_PASSWORD:-junction}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - junction_postgres_data:/var/lib/postgresql/data
+      - ./junction-starter/src/main/resources/sql/junction-api-key-schema.sql:/docker-entrypoint-initdb.d/001-junction-api-keys.sql:ro
+
+volumes:
+  junction_postgres_data:
+    driver: local

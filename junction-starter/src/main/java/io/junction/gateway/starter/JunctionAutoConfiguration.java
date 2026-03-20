@@ -12,6 +12,7 @@ import io.junction.gateway.starter.clientcompat.*;
 import io.junction.gateway.starter.config.JacksonConfig;
 import io.junction.gateway.starter.observability.*;
 import io.junction.gateway.starter.security.ApiKeyInitializer;
+import io.junction.gateway.starter.security.ApiKeyStorageConfiguration;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.tracing.otel.bridge.Slf4JEventListener;
@@ -47,7 +48,7 @@ import java.util.ArrayList;
  */
 @AutoConfiguration(before = OpenTelemetryTracingAutoConfiguration.class)
 @EnableConfigurationProperties({JunctionProperties.class, ClientAdapterProperties.class})
-@Import({JacksonConfig.class, JunctionActuatorSecurityConfiguration.class})
+@Import({JacksonConfig.class, JunctionActuatorSecurityConfiguration.class, ApiKeyStorageConfiguration.class})
 public class JunctionAutoConfiguration {
     
     
@@ -158,13 +159,6 @@ public class JunctionAutoConfiguration {
     }
     
     
-    
-    @Bean
-    @ConditionalOnMissingBean(ApiKeyRepository.class)
-    public ApiKeyRepository apiKeyRepository() {
-        
-        return new InMemoryApiKeyRepository();
-    }
     
     @Bean
     @ConditionalOnMissingBean(RateLimiter.class)
