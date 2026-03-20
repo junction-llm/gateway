@@ -7,25 +7,20 @@ import tools.jackson.core.JsonParser;
 import tools.jackson.databind.DeserializationContext;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ValueDeserializer;
-import tools.jackson.databind.exc.MismatchedInputException;
 
 public class EmbeddingRequestDeserializer extends ValueDeserializer<EmbeddingRequest> {
 
     @Override
     public EmbeddingRequest deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
-        try {
-            JsonNode node = ctxt.readTree(p);
+        JsonNode node = ctxt.readTree(p);
 
-            String model = readOptionalText(node.get("model"));
-            List<String> input = deserializeInput(node.get("input"));
-            String encodingFormat = readOptionalText(node.get("encoding_format"));
-            Integer dimensions = readOptionalInteger(node.get("dimensions"));
-            String user = readOptionalText(node.get("user"));
+        String model = readOptionalText(node.get("model"));
+        List<String> input = deserializeInput(node.get("input"));
+        String encodingFormat = readOptionalText(node.get("encoding_format"));
+        Integer dimensions = readOptionalInteger(node.get("dimensions"));
+        String user = readOptionalText(node.get("user"));
 
-            return new EmbeddingRequest(model, input, encodingFormat, dimensions, user);
-        } catch (IllegalArgumentException e) {
-            throw MismatchedInputException.from(p, EmbeddingRequest.class, e.getMessage());
-        }
+        return new EmbeddingRequest(model, input, encodingFormat, dimensions, user);
     }
 
     private List<String> deserializeInput(JsonNode node) {

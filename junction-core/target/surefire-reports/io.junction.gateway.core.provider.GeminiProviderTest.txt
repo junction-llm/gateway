@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: io.junction.gateway.core.provider.GeminiProviderTest
--------------------------------------------------------------------------------
-Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.160 s -- in io.junction.gateway.core.provider.GeminiProviderTest

@@ -2,20 +2,25 @@ package io.junction.gateway.core.provider;
 
 import io.junction.gateway.core.exception.ProviderException;
 import io.junction.gateway.core.model.ChatCompletionRequest;
+import io.junction.gateway.core.model.ProviderResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.ByteArrayInputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -110,6 +115,19 @@ class OllamaProviderTest {
     }
 
     @Test
+    void testParseNdJson_CapturesThinkingOnlyChunk() {
+        var responses = invokeParseNdJson("""
+            {"model":"kimi-k2.5","message":{"thinking":"Working through the answer"},"done":false}
+            """);
+
+        var response = assertInstanceOf(ProviderResponse.OllamaResponse.class, responses.getFirst());
+        assertEquals("", response.content());
+        assertEquals("Working through the answer", response.thinking());
+        assertEquals("kimi-k2.5", response.model());
+        assertFalse(response.done());
+    }
+
+    @Test
     void testResolveImageToBase64_AcceptsDataUri() throws Exception {
         assertEquals(SAMPLE_IMAGE_BASE64, invokeNormalizeImage("data:image/png;base64," + SAMPLE_IMAGE_BASE64));
     }
@@ -168,6 +186,25 @@ class OllamaProviderTest {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to invoke normalizeImageInput", e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ProviderResponse> invokeParseNdJson(String payload) {
+        try {
+            var method = OllamaProvider.class.getDeclaredMethod("parseNdJson", java.io.InputStream.class, UUID.class);
+            method.setAccessible(true);
+
+            try (Stream<ProviderResponse> stream = (Stream<ProviderResponse>) method.invoke(
+                provider,
+                new ByteArrayInputStream(payload.getBytes(StandardCharsets.UTF_8)),
+                UUID.randomUUID()
+            )) {
+                return stream.toList();
+            }
+        } catch (Exception e) {
+            fail("Failed to invoke parseNdJson: " + e.getMessage());
+            return List.of();
         }
     }
 }

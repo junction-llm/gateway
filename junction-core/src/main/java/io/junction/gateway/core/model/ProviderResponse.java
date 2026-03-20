@@ -4,9 +4,9 @@ import java.util.List;
 
 public sealed interface ProviderResponse {
     record GeminiResponse(String text, int promptTokens, int completionTokens, boolean finished) implements ProviderResponse {}
-    record OllamaResponse(String content, String model, boolean done, List<ToolCall> toolCalls, Usage usage) implements ProviderResponse {
-        public OllamaResponse(String content, String model, boolean done, List<ToolCall> toolCalls) {
-            this(content, model, done, toolCalls, null);
+    record OllamaResponse(String content, String thinking, String model, boolean done, List<ToolCall> toolCalls, Usage usage) implements ProviderResponse {
+        public OllamaResponse(String content, String thinking, String model, boolean done, List<ToolCall> toolCalls) {
+            this(content, thinking, model, done, toolCalls, null);
         }
     }
     record ErrorResponse(String error, int code) implements ProviderResponse {}

@@ -3,6 +3,8 @@ package io.junction.gateway.core.provider;
 import io.junction.gateway.core.context.RequestContext;
 import io.junction.gateway.core.exception.ProviderException;
 import io.junction.gateway.core.model.*;
+import io.junction.gateway.core.telemetry.GatewayTelemetry;
+import io.junction.gateway.core.tracing.GatewayTracing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
 import tools.jackson.databind.JsonNode;
@@ -30,10 +33,22 @@ public final class OllamaProvider implements LlmProvider {
     private final HttpClient client;
     private final String baseUrl;
     private final String defaultModel;
+    private final GatewayTelemetry telemetry;
+    private final GatewayTracing tracing;
     
     public OllamaProvider(String baseUrl, String defaultModel) {
+        this(baseUrl, defaultModel, GatewayTelemetry.noop(), GatewayTracing.noop());
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry) {
+        this(baseUrl, defaultModel, telemetry, GatewayTracing.noop());
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing) {
         this.baseUrl = baseUrl;
         this.defaultModel = defaultModel;
+        this.telemetry = telemetry != null ? telemetry : GatewayTelemetry.noop();
+        this.tracing = tracing != null ? tracing : GatewayTracing.noop();
 
         this.client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -71,7 +86,9 @@ public final class OllamaProvider implements LlmProvider {
     
     @Override
     public Stream<ProviderResponse> execute(ChatCompletionRequest request) {
+        var startNanos = System.nanoTime();
         var traceId = RequestContext.Context.current().traceId();
+        var traceScope = tracing.startSpan("junction.provider.chat");
         
         var model = request.model() != null ? request.model() : defaultModel;
         var messagesPayload = formatMessages(request.messages());
@@ -80,6 +97,11 @@ public final class OllamaProvider implements LlmProvider {
         
         var hasImageInputs = request.messages() != null
             && request.messages().stream().anyMatch(ChatCompletionRequest.Message::hasImageParts);
+
+        traceScope.tag("junction.provider", providerId());
+        traceScope.tag("junction.operation", "chat");
+        traceScope.tag("junction.model", model);
+        traceScope.tag("junction.stream", Boolean.toString(stream));
         
         log.info("[{}] OllamaProvider executing request: model={}, stream={}, temp={}, image_inputs={}", 
                 traceId, model, stream, temp, hasImageInputs);
@@ -95,6 +117,10 @@ public final class OllamaProvider implements LlmProvider {
         try {
             json = serializeRequestBody(requestBody);
         } catch (ProviderException e) {
+            traceScope.tag("junction.outcome", "serialize_error");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "serialize_error", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
         }
         
@@ -111,12 +137,13 @@ public final class OllamaProvider implements LlmProvider {
             
         log.debug("[{}] Request target model: {}", traceId, model);
         
-        var httpReq = HttpRequest.newBuilder()
+        var httpReqBuilder = HttpRequest.newBuilder()
             .uri(URI.create(baseUrl + "/api/chat"))
             .header("Content-Type", "application/json")
             .header("X-Trace-ID", traceId.toString())
-            .POST(HttpRequest.BodyPublishers.ofString(json))
-            .build();
+            .POST(HttpRequest.BodyPublishers.ofString(json));
+        traceScope.propagationHeaders().forEach(httpReqBuilder::header);
+        var httpReq = httpReqBuilder.build();
 
         try {
             log.debug("[{}] Sending request to Ollama at: {}", traceId, baseUrl);
@@ -126,69 +153,133 @@ public final class OllamaProvider implements LlmProvider {
                 log.error("[{}] Ollama returned HTTP error: {}", traceId, response.statusCode());
                 var errorBody = new String(response.body().readAllBytes());
                 log.error("[{}] Error response body: {}", traceId, errorBody);
+                traceScope.tag("junction.outcome", "http_error");
+                traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
+                traceScope.error(new ProviderException(
+                    "Ollama error: HTTP " + response.statusCode() + " - " + errorBody,
+                    response.statusCode()
+                ));
+                telemetry.recordProviderRequest(providerId(), "chat", "http_error", System.nanoTime() - startNanos);
+                traceScope.close();
                 return Stream.of(new ProviderResponse.ErrorResponse(
                     "Ollama error: HTTP " + response.statusCode() + " - " + errorBody, 
                     response.statusCode()));
             }
             
             log.debug("[{}] Received successful response from Ollama, parsing NDJSON stream", traceId);
-            return parseNdJson(response.body(), traceId);
+            return instrumentStream(parseNdJson(response.body(), traceId), "chat", startNanos, traceScope);
             
         } catch (java.net.http.HttpTimeoutException e) {
             log.error("[{}] Timeout calling Ollama: {}", traceId, e.getMessage());
+            traceScope.tag("junction.outcome", "timeout");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "timeout", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama timeout: " + e.getMessage(), 504));
         } catch (java.io.IOException e) {
             log.error("[{}] IO error calling Ollama: {}", traceId, e.getMessage());
+            traceScope.tag("junction.outcome", "io_error");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "io_error", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama connection error: " + e.getMessage(), 502));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.error("[{}] Request interrupted: {}", traceId, e.getMessage());
+            traceScope.tag("junction.outcome", "interrupted");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "interrupted", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse("Request interrupted", 500));
         } catch (ProviderException e) {
             log.error("[{}] Invalid Ollama request: {}", traceId, e.getMessage());
+            traceScope.tag("junction.outcome", "provider_error");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "provider_error", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
         } catch (Exception e) {
             log.error("[{}] Unexpected error calling Ollama: {}", traceId, e.getMessage(), e);
+            traceScope.tag("junction.outcome", "unexpected_error");
+            traceScope.error(e);
+            telemetry.recordProviderRequest(providerId(), "chat", "unexpected_error", System.nanoTime() - startNanos);
+            traceScope.close();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama error: " + e.getMessage(), 500));
         }
     }
 
     @Override
     public EmbeddingResponse embed(EmbeddingRequest request) {
+        var startNanos = System.nanoTime();
         var traceId = RequestContext.Context.current().traceId();
         var model = request.model();
 
-        if (model == null || model.isBlank()) {
-            throw new ProviderException("Embeddings request requires a model.", 400);
-        }
-
-        var httpReq = HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/embed"))
-            .header("Content-Type", "application/json")
-            .header("X-Trace-ID", traceId.toString())
-            .POST(HttpRequest.BodyPublishers.ofString(serializeEmbeddingRequest(request)))
-            .build();
-
-        try {
-            log.info("[{}] OllamaProvider embedding request: model={}, inputs={}",
-                traceId, model, request.input().size());
-
-            var response = client.send(httpReq, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                throw new ProviderException(
-                    "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
-                    response.statusCode()
-                );
+        try (var traceScope = tracing.startSpan("junction.provider.embeddings")) {
+            traceScope.tag("junction.provider", providerId());
+            traceScope.tag("junction.operation", "embeddings");
+            if (model != null) {
+                traceScope.tag("junction.model", model);
             }
 
-            return parseEmbeddingResponse(response.body(), model, request.encodingFormat(), traceId);
-        } catch (java.net.http.HttpTimeoutException e) {
-            throw new ProviderException("Ollama embeddings timeout: " + e.getMessage(), 504);
-        } catch (java.io.IOException e) {
-            throw new ProviderException("Ollama embeddings connection error: " + e.getMessage(), 502);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ProviderException("Embeddings request interrupted", 500);
+            if (model == null || model.isBlank()) {
+                traceScope.tag("junction.outcome", "invalid_request");
+                telemetry.recordProviderRequest(providerId(), "embeddings", "invalid_request", System.nanoTime() - startNanos);
+                throw new ProviderException("Embeddings request requires a model.", 400);
+            }
+
+            var httpReqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/embed"))
+                .header("Content-Type", "application/json")
+                .header("X-Trace-ID", traceId.toString())
+                .POST(HttpRequest.BodyPublishers.ofString(serializeEmbeddingRequest(request)));
+            traceScope.propagationHeaders().forEach(httpReqBuilder::header);
+            var httpReq = httpReqBuilder.build();
+
+            try {
+                log.info("[{}] OllamaProvider embedding request: model={}, inputs={}",
+                    traceId, model, request.input().size());
+
+                var response = client.send(httpReq, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 200) {
+                    traceScope.tag("junction.outcome", "http_error");
+                    traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
+                    traceScope.error(new ProviderException(
+                        "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
+                        response.statusCode()
+                    ));
+                    telemetry.recordProviderRequest(providerId(), "embeddings", "http_error", System.nanoTime() - startNanos);
+                    throw new ProviderException(
+                        "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
+                        response.statusCode()
+                    );
+                }
+
+                var embeddingResponse = parseEmbeddingResponse(response.body(), model, request.encodingFormat(), traceId);
+                traceScope.tag("junction.outcome", "success");
+                telemetry.recordProviderRequest(providerId(), "embeddings", "success", System.nanoTime() - startNanos);
+                return embeddingResponse;
+            } catch (java.net.http.HttpTimeoutException e) {
+                traceScope.tag("junction.outcome", "timeout");
+                traceScope.error(e);
+                telemetry.recordProviderRequest(providerId(), "embeddings", "timeout", System.nanoTime() - startNanos);
+                throw new ProviderException("Ollama embeddings timeout: " + e.getMessage(), 504);
+            } catch (java.io.IOException e) {
+                traceScope.tag("junction.outcome", "io_error");
+                traceScope.error(e);
+                telemetry.recordProviderRequest(providerId(), "embeddings", "io_error", System.nanoTime() - startNanos);
+                throw new ProviderException("Ollama embeddings connection error: " + e.getMessage(), 502);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                traceScope.tag("junction.outcome", "interrupted");
+                traceScope.error(e);
+                telemetry.recordProviderRequest(providerId(), "embeddings", "interrupted", System.nanoTime() - startNanos);
+                throw new ProviderException("Embeddings request interrupted", 500);
+            } catch (ProviderException e) {
+                traceScope.tag("junction.outcome", "provider_error");
+                traceScope.error(e);
+                telemetry.recordProviderRequest(providerId(), "embeddings", "provider_error", System.nanoTime() - startNanos);
+                throw e;
+            }
         }
     }
     
@@ -198,6 +289,29 @@ public final class OllamaProvider implements LlmProvider {
         } catch (Exception e) {
             throw new ProviderException("Failed to serialize Ollama request", 500);
         }
+    }
+
+    private Stream<ProviderResponse> instrumentStream(Stream<ProviderResponse> stream,
+                                                      String operation,
+                                                      long startNanos,
+                                                      GatewayTracing.TraceScope traceScope) {
+        var outcome = new AtomicReference<>("success");
+        return stream
+            .peek(response -> {
+                if (response instanceof ProviderResponse.ErrorResponse) {
+                    outcome.set("error");
+                }
+            })
+            .onClose(() -> {
+                traceScope.tag("junction.outcome", outcome.get());
+                telemetry.recordProviderRequest(
+                    providerId(),
+                    operation,
+                    outcome.get(),
+                    System.nanoTime() - startNanos
+                );
+                traceScope.close();
+            });
     }
 
     private String buildDebugMessages(List<ChatCompletionRequest.Message> messages, boolean truncate) {
@@ -248,6 +362,7 @@ public final class OllamaProvider implements LlmProvider {
                     var node = mapper.readTree(line);
                     
                     var content = node.path("message").path("content").asText("");
+                    var thinking = node.path("message").path("thinking").asText("");
                     var model = node.path("model").asText();
                     var done = node.path("done").asBoolean();
                     
@@ -298,11 +413,17 @@ public final class OllamaProvider implements LlmProvider {
                     }
                     
                     int currentChunk = chunkCounter.incrementAndGet();
+                    boolean hasContent = !content.isEmpty();
+                    boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
+                    boolean hasThinking = !thinking.isEmpty();
                     
                     if (currentChunk == 1 || currentChunk % 60 == 0 || done) {
-                        if (!content.isEmpty() || (toolCalls != null && !toolCalls.isEmpty())) {
+                        if (hasContent || hasToolCalls) {
                             log.debug("[{}] Received chunk #{} - model: {}, content length: {}, toolCalls: {}, done: {}", 
                                 traceId, currentChunk, model, content.length(), toolCalls != null ? toolCalls.size() : 0, done);
+                        } else if (hasThinking) {
+                            log.debug("[{}] Received thinking chunk #{} - model: {}, thinking length: {}, done: {}",
+                                traceId, currentChunk, model, thinking.length(), done);
                         } else {
                             log.debug("[{}] Received empty chunk #{} - model: {}, done: {}", traceId, currentChunk, model, done);
                         }
@@ -312,7 +433,7 @@ public final class OllamaProvider implements LlmProvider {
                         log.info("[{}] Ollama stream marked as complete", traceId);
                     }
                     
-                    return (ProviderResponse) new ProviderResponse.OllamaResponse(content, model, done, toolCalls, usage);
+                    return (ProviderResponse) new ProviderResponse.OllamaResponse(content, thinking, model, done, toolCalls, usage);
                     
                 } catch (Exception e) {
                     log.error("[{}] Parse error for line: {}", traceId, line, e);
@@ -325,7 +446,9 @@ public final class OllamaProvider implements LlmProvider {
     
     @Override
     public List<ModelInfo> getAvailableModels() {
-        try {
+        try (var traceScope = tracing.startSpan("junction.provider.models")) {
+            traceScope.tag("junction.provider", providerId());
+            traceScope.tag("junction.operation", "models");
             var req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/tags"))
                 .timeout(Duration.ofSeconds(5))
@@ -335,6 +458,8 @@ public final class OllamaProvider implements LlmProvider {
             var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
             
             if (resp.statusCode() != 200) {
+                traceScope.tag("junction.outcome", "http_error");
+                traceScope.tag("http.status_code", Integer.toString(resp.statusCode()));
                 log.warn("Failed to fetch models from Ollama: HTTP {}", resp.statusCode());
                 return List.of();
             }
@@ -356,13 +481,26 @@ public final class OllamaProvider implements LlmProvider {
                 }
             }
             
+            traceScope.tag("junction.outcome", "success");
             log.info("Fetched {} models from Ollama at {}", result.size(), baseUrl);
             return result;
             
         } catch (java.net.http.HttpTimeoutException e) {
+            try (var traceScope = tracing.startSpan("junction.provider.models.error")) {
+                traceScope.tag("junction.provider", providerId());
+                traceScope.tag("junction.operation", "models");
+                traceScope.tag("junction.outcome", "timeout");
+                traceScope.error(e);
+            }
             log.warn("Timeout fetching models from Ollama: {}", e.getMessage());
             return List.of();
         } catch (Exception e) {
+            try (var traceScope = tracing.startSpan("junction.provider.models.error")) {
+                traceScope.tag("junction.provider", providerId());
+                traceScope.tag("junction.operation", "models");
+                traceScope.tag("junction.outcome", "error");
+                traceScope.error(e);
+            }
             log.error("Error fetching models from Ollama: {}", e.getMessage(), e);
             return List.of();
         }

@@ -10,7 +10,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.time.LocalDate;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
@@ -85,12 +86,17 @@ public class PerRequestFileAppender extends AppenderBase<ILoggingEvent> {
     }
     
     private void writeToRequestLog(UUID traceId, ILoggingEvent event) {
-        RequestLogWriter writer = activeWriters.computeIfAbsent(traceId, this::createWriter);
-        writer.append(event);
+        RequestLogWriter writer = activeWriters.computeIfAbsent(traceId, ignored -> createWriter(traceId, event));
+        if (writer != null) {
+            writer.append(event);
+        }
     }
     
-    private RequestLogWriter createWriter(UUID traceId) {
-        String dateFolder = LocalDate.now(ZoneOffset.UTC).format(DATE_FORMATTER);
+    private RequestLogWriter createWriter(UUID traceId, ILoggingEvent event) {
+        String dateFolder = Instant.ofEpochMilli(event.getTimeStamp())
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .format(DATE_FORMATTER);
         Path logFile = Paths.get(basePath, dateFolder, traceId.toString() + ".log");
         
         try {

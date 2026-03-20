@@ -19,6 +19,8 @@ public class JunctionProperties {
     private Providers providers = new Providers();
     private Security security = new Security();
     private ClientAdapters clientAdapters = new ClientAdapters();
+    private Logging logging = new Logging();
+    private Observability observability = new Observability();
     
     
     public static class Providers {
@@ -201,6 +203,59 @@ public class JunctionProperties {
         public boolean isExternalPriority() { return externalPriority; }
         public void setExternalPriority(boolean externalPriority) { this.externalPriority = externalPriority; }
     }
+
+
+    public static class Logging {
+        private ChatResponse chatResponse = new ChatResponse();
+
+        public ChatResponse getChatResponse() { return chatResponse; }
+        public void setChatResponse(ChatResponse chatResponse) { this.chatResponse = chatResponse; }
+    }
+
+
+    public static class ChatResponse {
+        private boolean enabled = false;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    }
+
+    public static class Observability {
+        private Admin admin = new Admin();
+        private ManagementSecurity security = new ManagementSecurity();
+
+        public Admin getAdmin() { return admin; }
+        public void setAdmin(Admin admin) { this.admin = admin; }
+
+        public ManagementSecurity getSecurity() { return security; }
+        public void setSecurity(ManagementSecurity security) { this.security = security; }
+    }
+
+    public static class Admin {
+        private boolean cacheWriteEnabled = false;
+
+        public boolean isCacheWriteEnabled() { return cacheWriteEnabled; }
+        public void setCacheWriteEnabled(boolean cacheWriteEnabled) { this.cacheWriteEnabled = cacheWriteEnabled; }
+    }
+
+    public static class ManagementSecurity {
+        private boolean enabled = true;
+        private boolean publicHealthEnabled = true;
+        private String username = "actuator";
+        private String password = "";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public boolean isPublicHealthEnabled() { return publicHealthEnabled; }
+        public void setPublicHealthEnabled(boolean publicHealthEnabled) { this.publicHealthEnabled = publicHealthEnabled; }
+
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+    }
     
     
     public Providers getProviders() { return providers; }
@@ -211,6 +266,12 @@ public class JunctionProperties {
     
     public ClientAdapters getClientAdapters() { return clientAdapters; }
     public void setClientAdapters(ClientAdapters clientAdapters) { this.clientAdapters = clientAdapters; }
+
+    public Logging getLogging() { return logging; }
+    public void setLogging(Logging logging) { this.logging = logging; }
+
+    public Observability getObservability() { return observability; }
+    public void setObservability(Observability observability) { this.observability = observability; }
     
     
     public Ollama getOllama() { return providers.getOllama(); }
