@@ -43,6 +43,19 @@ junction:
     hot-reload: true    
     external-priority: true
 
+  logging:
+    chat-response:
+      enabled: false
+
+  observability:
+    admin:
+      cache-write-enabled: false
+    security:
+      enabled: true
+      public-health-enabled: true
+      username: ${JUNCTION_OBSERVABILITY_SECURITY_USERNAME:actuator}
+      password: ${JUNCTION_OBSERVABILITY_SECURITY_PASSWORD:}
+
 spring:
   threads:
     virtual:
@@ -57,3 +70,17 @@ logging:
     org.springframework.web: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  endpoint:
+    health:
+      show-details: when_authorized
+  endpoints:
+    web:
+      exposure:
+        include: health
+        # Expose protected management endpoints only when you also set
+        # JUNCTION_OBSERVABILITY_SECURITY_PASSWORD and want authenticated access:
+        # include: health,info,metrics,junction
+        # Add junctioncache only when you intentionally enable write access:
+        # include: health,info,metrics,junction,junctioncache

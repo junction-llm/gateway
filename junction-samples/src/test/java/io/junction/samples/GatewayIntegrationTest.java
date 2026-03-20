@@ -2,15 +2,22 @@ package io.junction.samples;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.junction.gateway.core.provider.OllamaProvider;
 import io.junction.gateway.core.router.RoundRobinRouter;
 import io.junction.gateway.core.router.Router;
+import io.junction.gateway.core.telemetry.GatewayTelemetry;
+import io.junction.gateway.core.tracing.GatewayTracing;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import jakarta.servlet.Filter;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.SdkTracerProviderBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
@@ -24,16 +31,18 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
 
 @SpringBootTest(
     classes = {Application.class, GatewayIntegrationTest.TestConfig.class},
@@ -53,11 +62,17 @@ class GatewayIntegrationTest {
     @Autowired
     private StubOllamaBackend backend;
 
+    @Autowired
+    @Qualifier("springSecurityFilterChain")
+    private Filter springSecurityFilterChain;
+
     private MockMvc mockMvc;
 
     @PostConstruct
     void setUpMockMvc() {
-        this.mockMvc = webAppContextSetup(webApplicationContext).build();
+        this.mockMvc = webAppContextSetup(webApplicationContext)
+            .addFilters(springSecurityFilterChain)
+            .build();
     }
 
     @Test
@@ -113,6 +128,38 @@ class GatewayIntegrationTest {
             .andExpect(content().string(containsString("data:")))
             .andExpect(content().string(containsString("[DONE]")))
             .andExpect(content().string(containsString("Hello")));
+    }
+
+    @Test
+    void streamsThinkingFirstResponsesWithoutLeakingThinking() throws Exception {
+        backend.setChatResponse("""
+            {"model":"test-model","message":{"thinking":"reasoning step"},"done":false}
+            {"model":"test-model","message":{"content":"Hello"},"done":false}
+            {"model":"test-model","message":{"content":""},"done":true}
+            """);
+
+        MvcResult result = mockMvc.perform(post("/v1/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .content("""
+                    {
+                      "model": "test-model",
+                      "messages": [{"role": "user", "content": "Hello"}],
+                      "stream": true
+                    }
+                    """))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        result.getAsyncResult(5_000);
+
+        mockMvc.perform(asyncDispatch(result))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andExpect(content().string(containsString("[DONE]")))
+            .andExpect(content().string(containsString("Hello")))
+            .andExpect(content().string(not(containsString("reasoning step"))))
+            .andExpect(content().string(not(containsString("\"thinking\""))));
     }
 
     @Test
@@ -203,9 +250,23 @@ class GatewayIntegrationTest {
         }
 
         @Bean
+        InMemorySpanExporter inMemorySpanExporter() {
+            return InMemorySpanExporter.create();
+        }
+
+        @Bean
+        SdkTracerProviderBuilderCustomizer testSpanExporterCustomizer(InMemorySpanExporter inMemorySpanExporter) {
+            return builder -> builder.addSpanProcessor(SimpleSpanProcessor.create(inMemorySpanExporter));
+        }
+
+        @Bean
         @Primary
-        Router router(StubOllamaBackend backend) {
-            return new RoundRobinRouter(List.of(new OllamaProvider(backend.baseUrl(), "test-model")));
+        Router router(StubOllamaBackend backend, GatewayTelemetry telemetry, GatewayTracing tracing) {
+            return new RoundRobinRouter(
+                List.of(new OllamaProvider(backend.baseUrl(), "test-model", telemetry, tracing)),
+                telemetry,
+                tracing
+            );
         }
     }
 
@@ -217,6 +278,11 @@ class GatewayIntegrationTest {
         private final AtomicReference<String> embeddingResponse = new AtomicReference<>("""
             {"model":"embeddinggemma","embeddings":[[0.1,0.2,0.3]],"prompt_eval_count":12}
             """);
+        private final AtomicInteger chatStatus = new AtomicInteger(200);
+        private final AtomicInteger embeddingStatus = new AtomicInteger(200);
+        private final AtomicReference<String> lastChatTraceparent = new AtomicReference<>();
+        private final AtomicReference<String> lastChatTracestate = new AtomicReference<>();
+        private final AtomicReference<String> lastEmbeddingTraceparent = new AtomicReference<>();
 
         private HttpServer server;
 
@@ -249,8 +315,28 @@ class GatewayIntegrationTest {
             chatResponse.set(responseBody);
         }
 
+        void setChatStatus(int statusCode) {
+            chatStatus.set(statusCode);
+        }
+
         void setEmbeddingResponse(String responseBody) {
             embeddingResponse.set(responseBody);
+        }
+
+        void setEmbeddingStatus(int statusCode) {
+            embeddingStatus.set(statusCode);
+        }
+
+        String lastChatTraceparent() {
+            return lastChatTraceparent.get();
+        }
+
+        String lastChatTracestate() {
+            return lastChatTracestate.get();
+        }
+
+        String lastEmbeddingTraceparent() {
+            return lastEmbeddingTraceparent.get();
         }
 
         private void handleTags(HttpExchange exchange) throws IOException {
@@ -263,18 +349,21 @@ class GatewayIntegrationTest {
         }
 
         private void handleChat(HttpExchange exchange) throws IOException {
+            lastChatTraceparent.set(exchange.getRequestHeaders().getFirst("traceparent"));
+            lastChatTracestate.set(exchange.getRequestHeaders().getFirst("tracestate"));
             byte[] response = chatResponse.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/x-ndjson");
-            exchange.sendResponseHeaders(200, response.length);
+            exchange.sendResponseHeaders(chatStatus.get(), response.length);
             try (OutputStream outputStream = exchange.getResponseBody()) {
                 outputStream.write(response);
             }
         }
 
         private void handleEmbed(HttpExchange exchange) throws IOException {
+            lastEmbeddingTraceparent.set(exchange.getRequestHeaders().getFirst("traceparent"));
             byte[] response = embeddingResponse.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, response.length);
+            exchange.sendResponseHeaders(embeddingStatus.get(), response.length);
             try (OutputStream outputStream = exchange.getResponseBody()) {
                 outputStream.write(response);
             }

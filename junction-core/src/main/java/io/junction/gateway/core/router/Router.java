@@ -6,7 +6,11 @@ import io.junction.gateway.core.provider.LlmProvider;
 import java.util.List;
 
 public interface Router {
-    LlmProvider route(ChatCompletionRequest request);
+    default LlmProvider route(ChatCompletionRequest request) {
+        return route(request, null);
+    }
+
+    LlmProvider route(ChatCompletionRequest request, String preferredProvider);
     LlmProvider route(EmbeddingRequest request);
     
     /**

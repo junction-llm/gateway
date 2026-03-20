@@ -15,7 +15,6 @@ public class OpenAIAdapterGatherer implements Gatherer<ProviderResponse, OpenAIA
         StringBuilder content = new StringBuilder();
         StringBuilder toolCallBuffer = new StringBuilder();
         String model;
-        boolean first = true;
         boolean inToolCall = false;
         int toolCallIndex = 0;
         ProviderResponse.Usage usage = null;
@@ -42,9 +41,11 @@ public class OpenAIAdapterGatherer implements Gatherer<ProviderResponse, OpenAIA
         return (state, element, downstream) -> {
             switch (element) {
                 case ProviderResponse.GeminiResponse(String text, _, _, boolean finished) -> {
+                    ensureModel(state, null);
                     handleContent(state, text, finished, downstream);
                 }
-                case ProviderResponse.OllamaResponse(String content, String model, boolean done, java.util.List<ProviderResponse.ToolCall> toolCalls, ProviderResponse.Usage responseUsage) -> {
+                case ProviderResponse.OllamaResponse(String content, String ignoredThinking, String model, boolean done, java.util.List<ProviderResponse.ToolCall> toolCalls, ProviderResponse.Usage responseUsage) -> {
+                    ensureModel(state, model);
                     if (responseUsage != null) {
                         state.usage = responseUsage;
                     }
@@ -90,13 +91,18 @@ public class OpenAIAdapterGatherer implements Gatherer<ProviderResponse, OpenAIA
         };
     }
     
+    private void ensureModel(State state, String providerModel) {
+        if (state.model == null || state.model.isBlank()) {
+            if (providerModel != null && !providerModel.isBlank()) {
+                state.model = providerModel;
+            } else {
+                state.model = targetModel;
+            }
+        }
+    }
+    
     private void handleContent(State state, String text, boolean finished, 
                                 Gatherer.Downstream<? super ChatCompletionChunk> downstream) {
-        if (state.first) {
-            state.model = targetModel;
-            state.first = false;
-        }
-        
         String contentToProcess = state.toolCallBuffer.toString() + text;
         state.toolCallBuffer.setLength(0);
         

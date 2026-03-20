@@ -1,6 +1,8 @@
 package io.junction.gateway.core.cache;
 
 import io.junction.gateway.core.model.ModelInfo;
+import io.junction.gateway.core.telemetry.GatewayTelemetry;
+import io.junction.gateway.core.tracing.GatewayTracing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +28,23 @@ public class ModelCacheService {
     private static record CacheEntry(List<ModelInfo> models, Instant expiry) {}
     
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private final GatewayTelemetry telemetry;
+    private final GatewayTracing tracing;
+
+    public record CacheSnapshot(String providerId, int modelCount, Instant expiry) {}
+
+    public ModelCacheService() {
+        this(GatewayTelemetry.noop(), GatewayTracing.noop());
+    }
+
+    public ModelCacheService(GatewayTelemetry telemetry) {
+        this(telemetry, GatewayTracing.noop());
+    }
+
+    public ModelCacheService(GatewayTelemetry telemetry, GatewayTracing tracing) {
+        this.telemetry = telemetry != null ? telemetry : GatewayTelemetry.noop();
+        this.tracing = tracing != null ? tracing : GatewayTracing.noop();
+    }
     
     /**
      * Gets models from cache if valid, otherwise fetches and caches them.
@@ -39,19 +58,33 @@ public class ModelCacheService {
         
         if (entry != null && Instant.now().isBefore(entry.expiry())) {
             log.debug("Cache hit for {} models ({} entries)", providerName, entry.models().size());
+            telemetry.recordModelCacheHit(providerId);
             return entry.models();
         }
         
         log.info("Cache miss for {}, fetching fresh models", providerName);
-        var models = fetcher.get();
-        
-        var expiry = Instant.now().plus(CACHE_TTL);
-        cache.put(providerId, new CacheEntry(models, expiry));
-        
-        log.info("Cached {} models for {} (expires in {} hours)", 
-            models.size(), providerName, CACHE_TTL.toHours());
-        
-        return models;
+        telemetry.recordModelCacheMiss(providerId);
+        try (var traceScope = tracing.startSpan("junction.model_cache.refresh")) {
+            traceScope.tag("junction.provider", providerId);
+            traceScope.tag("junction.provider_name", providerName);
+            var models = fetcher.get();
+            traceScope.tag("junction.outcome", "success");
+            var expiry = Instant.now().plus(CACHE_TTL);
+            cache.put(providerId, new CacheEntry(models, expiry));
+
+            log.info("Cached {} models for {} (expires in {} hours)",
+                models.size(), providerName, CACHE_TTL.toHours());
+
+            return models;
+        } catch (RuntimeException ex) {
+            try (var traceScope = tracing.startSpan("junction.model_cache.refresh.error")) {
+                traceScope.tag("junction.provider", providerId);
+                traceScope.tag("junction.provider_name", providerName);
+                traceScope.tag("junction.outcome", "error");
+                traceScope.error(ex);
+            }
+            throw ex;
+        }
     }
     
     /**
@@ -61,8 +94,13 @@ public class ModelCacheService {
      * @return void
      */
     public void evictCache(String providerId) {
-        cache.remove(providerId);
-        log.debug("Evicted cache for provider {}", providerId);
+        try (var traceScope = tracing.startSpan("junction.model_cache.evict")) {
+            traceScope.tag("junction.provider", providerId);
+            cache.remove(providerId);
+            log.debug("Evicted cache for provider {}", providerId);
+            telemetry.recordModelCacheEviction(providerId);
+            traceScope.tag("junction.outcome", "success");
+        }
     }
     
     /**
@@ -71,8 +109,13 @@ public class ModelCacheService {
      * @return void
      */
     public void evictAll() {
-        cache.clear();
-        log.info("Evicted all cached models");
+        try (var traceScope = tracing.startSpan("junction.model_cache.evict_all")) {
+            traceScope.tag("junction.provider", "all");
+            cache.clear();
+            log.info("Evicted all cached models");
+            telemetry.recordModelCacheEviction("all");
+            traceScope.tag("junction.outcome", "success");
+        }
     }
     
     /**
@@ -82,5 +125,20 @@ public class ModelCacheService {
      */
     public int getCacheSize() {
         return cache.size();
+    }
+
+    public List<CacheSnapshot> snapshot() {
+        return cache.entrySet().stream()
+            .map(entry -> new CacheSnapshot(
+                entry.getKey(),
+                entry.getValue().models().size(),
+                entry.getValue().expiry()
+            ))
+            .sorted(java.util.Comparator.comparing(CacheSnapshot::providerId))
+            .toList();
+    }
+
+    public Duration getCacheTtl() {
+        return CACHE_TTL;
     }
 }
