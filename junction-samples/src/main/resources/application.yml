@@ -28,7 +28,8 @@ junction:
       # h2-username: sa
       # h2-password: ""
       
-      # PostgreSQL backend: requires the PostgreSQL JDBC driver on the app classpath
+      # PostgreSQL backend: requires the PostgreSQL JDBC driver on the app classpath.
+      # Enable it with direct Spring property or environment overrides instead of a dedicated profile.
       # postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
       # postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
       # postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:}

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.4 - 2026-03-21
+
+### Added
+
+- Optional chat response-body logging for `POST /v1/chat/completions`, enabled with `junction.logging.chat-response.enabled`
+- File-only logging of normalized chat response bodies to per-request log files, including one final assembled entry for successful streaming responses
+- Actuator-based observability foundation with provider health, info contributors, custom `junction.*` metrics, and `X-Trace-ID` response headers
+- Read-only `/actuator/junction` admin snapshot plus opt-in model-cache eviction via `/actuator/junctioncache`
+- Built-in Actuator hardening with HTTP Basic auth for protected management endpoints and public-safe health defaults
+- Distributed tracing with W3C propagation across gateway requests and outbound provider calls
+- OTLP trace export support via Spring Boot OpenTelemetry configuration
+- Protected `/actuator/prometheus` support for Prometheus scraping
+
+### Changed
+
+- Preserved Junction's UUID `traceId` MDC value for per-request log routing while publishing distributed trace metadata separately as `otelTraceId` and `otelSpanId`
+
 ## 0.0.3 - 2026-03-17
 
 Added endpoint and multimodal support with stronger request validation.
