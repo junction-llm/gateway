@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.junction.gateway</groupId>
         <artifactId>junction-gateway-parent</artifactId>
-        <version>0.0.1</version>
+        <version>0.0.4</version>
     </parent>
 
     <artifactId>junction-samples</artifactId>

@@ -6,7 +6,7 @@
 
     <groupId>io.junction.gateway</groupId>
     <artifactId>junction-gateway-parent</artifactId>
-    <version>0.0.1</version>
+    <version>0.0.4</version>
     <packaging>pom</packaging>
 
     <name>Junction Gateway</name>
@@ -33,7 +33,7 @@
         <connection>scm:git:https://github.com/junction-llm/gateway.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/junction-llm/gateway.git</developerConnection>
         <url>https://github.com/junction-llm/gateway</url>
-        <tag>v0.0.1</tag>
+        <tag>v0.0.4</tag>
     </scm>
 
     <properties>

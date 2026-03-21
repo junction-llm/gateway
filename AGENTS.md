@@ -631,7 +631,7 @@ When extending this project, consider:
 2. **Advanced Routing**: Latency-based, cost-based, model-capability-based
 3. **Caching**: Response caching for identical requests
 4. **Rate Limiting**: Per-client rate limiting
-5. **Observability**: Micrometer metrics, distributed tracing
+5. **Observability**: Additional exporters, dashboards, and backend-specific integrations beyond OTLP/Prometheus
 6. **Authentication**: API key management, client authentication
 
 ## File Reference Quick Links
@@ -667,6 +667,6 @@ When extending this project, consider:
 
 ---
 
-**Last Updated**: 2026-03-17
-**Project Version**: 0.0.3
+**Last Updated**: 2026-03-21
+**Project Version**: 0.0.4
 **Java Version**: 25
