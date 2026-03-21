@@ -17,17 +17,18 @@ junction:
     api-key:
       required: true
       
+      # Supported backends: memory, file, h2, postgresql
       storage: memory
       
-      # Reserved for future file-based storage support
+      # File backend: YAML snapshot rewritten on key mutations and usage updates
       # file-path: ${JUNCTION_API_KEYS_FILE:./api-keys.yml}
       
-      # Reserved for future H2 storage support
+      # H2 backend: persistent JDBC storage for single-node deployments
       # h2-url: jdbc:h2:file:${JUNCTION_H2_PATH:./data/junction};DB_CLOSE_DELAY=-1
       # h2-username: sa
       # h2-password: ""
       
-      # Reserved for future PostgreSQL storage support
+      # PostgreSQL backend: requires the PostgreSQL JDBC driver on the app classpath
       # postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
       # postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
       # postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:}
@@ -36,6 +37,10 @@ junction:
         - key: ${JUNCTION_API_KEY_1:}
           name: "Development Key"
           tier: ENTERPRISE  # Options: FREE, PRO, ENTERPRISE
+        
+        - key: ${JUNCTION_API_KEY_AGENT_ZERO:}
+          name: "Agent Zero Key"
+          tier: FREE  # Most restrictive tier (20 req/min, 200/day, 1,000/month)
   
   client-adapters:
     classpath-enabled: true    

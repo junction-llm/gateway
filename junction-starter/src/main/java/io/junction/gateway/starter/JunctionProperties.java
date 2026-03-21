@@ -82,10 +82,10 @@ public class JunctionProperties {
         /** Storage type: memory, file, h2, postgresql */
         private String storage = "memory";
         
-        /** File path for file-based storage */
+        /** File path for the YAML storage backend */
         private String filePath = "${JUNCTION_API_KEYS_FILE:api-keys.yml}";
         
-        /** H2 database URL */
+        /** H2 database URL for JDBC-backed API-key storage */
         private String h2Url = "jdbc:h2:file:${JUNCTION_H2_PATH:./data/junction};DB_CLOSE_DELAY=-1";
         
         /** H2 username */
@@ -94,7 +94,7 @@ public class JunctionProperties {
         /** H2 password */
         private String h2Password = "";
         
-        /** PostgreSQL URL (for future use) */
+        /** PostgreSQL URL for JDBC-backed API-key storage */
         private String postgresqlUrl = "${JUNCTION_POSTGRES_URL:}";
         
         /** PostgreSQL username */
@@ -103,7 +103,7 @@ public class JunctionProperties {
         /** PostgreSQL password */
         private String postgresqlPassword = "${JUNCTION_POSTGRES_PASSWORD:}";
         
-        /** Pre-configured API keys (for memory storage) */
+        /** Startup seed API keys added when missing across all storage backends */
         private List<PreconfiguredKey> preconfigured = new ArrayList<>();
         
         public boolean isRequired() { return required; }

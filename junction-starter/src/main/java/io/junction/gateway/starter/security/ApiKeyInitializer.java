@@ -47,7 +47,7 @@ public class ApiKeyInitializer {
             
             if (properties.getApiKeyConfig().isRequired()) {
                 log.warn("API key authentication is required but no keys are configured!");
-                log.warn("Use 'junction.security.api-key.preconfigured' to add keys, or use the API to create keys.");
+                log.warn("Use 'junction.security.api-key.preconfigured' or populate the configured API key store before exposing the gateway.");
             }
             return;
         }
