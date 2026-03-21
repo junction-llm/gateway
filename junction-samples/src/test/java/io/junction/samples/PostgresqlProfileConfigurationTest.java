@@ -13,16 +13,17 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class PostgresqlProfileConfigurationTest {
+class PostgresqlConfigurationOverrideTest {
 
     @Test
     void defaultSampleConfigurationKeepsMemoryStorage() {
-        try (ConfigurableApplicationContext context = startContext(false)) {
+        try (ConfigurableApplicationContext context = startContext()) {
             JunctionProperties properties = context.getBean(JunctionProperties.class);
 
             assertThat(properties.getSecurity().getApiKey().getStorage()).isEqualTo("memory");
@@ -31,8 +32,13 @@ class PostgresqlProfileConfigurationTest {
     }
 
     @Test
-    void postgresqlProfileSwitchesSampleConfigurationToPostgresqlStorage() {
-        try (ConfigurableApplicationContext context = startContext(true)) {
+    void explicitPostgresqlOverridesSwitchSampleConfigurationToPostgresqlStorage() {
+        try (ConfigurableApplicationContext context = startContext(
+            "junction.security.api-key.storage=postgresql",
+            "junction.security.api-key.postgresql-url=jdbc:postgresql://localhost:5432/junction",
+            "junction.security.api-key.postgresql-username=junction",
+            "junction.security.api-key.postgresql-password=junction"
+        )) {
             JunctionProperties properties = context.getBean(JunctionProperties.class);
 
             assertThat(properties.getSecurity().getApiKey().getStorage()).isEqualTo("postgresql");
@@ -44,17 +50,14 @@ class PostgresqlProfileConfigurationTest {
         }
     }
 
-    private ConfigurableApplicationContext startContext(boolean postgresqlProfile) {
+    private ConfigurableApplicationContext startContext(String... additionalProperties) {
         List<String> properties = new ArrayList<>();
         properties.add("server.port=0");
         properties.add("junction.providers.ollama.enabled=false");
         properties.add("junction.providers.gemini.enabled=false");
         properties.add("junction.security.ip-rate-limit.enabled=false");
         properties.add("junction.observability.security.enabled=false");
-
-        if (postgresqlProfile) {
-            properties.add("spring.profiles.active=postgresql");
-        }
+        properties.addAll(Arrays.asList(additionalProperties));
 
         String[] args = properties.stream()
             .map(property -> "--" + property)
@@ -73,7 +76,7 @@ class PostgresqlProfileConfigurationTest {
         DataSource junctionApiKeyPostgresqlDataSource() {
             DriverManagerDataSource dataSource = new DriverManagerDataSource();
             dataSource.setDriverClassName("org.h2.Driver");
-            dataSource.setUrl("jdbc:h2:mem:sample-postgres-profile-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+            dataSource.setUrl("jdbc:h2:mem:sample-postgres-storage-override-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
             dataSource.setUsername("sa");
             dataSource.setPassword("");
             return dataSource;
