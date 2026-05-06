@@ -25,6 +25,7 @@ public class RoundRobinRouter implements Router {
     private final ConcurrentMap<String, HealthResult> healthCache = new ConcurrentHashMap<>();
     private final GatewayTelemetry telemetry;
     private final GatewayTracing tracing;
+    private final Duration healthCacheTtl;
     
     public RoundRobinRouter(List<LlmProvider> providers) {
         this(providers, GatewayTelemetry.noop(), GatewayTracing.noop());
@@ -35,9 +36,19 @@ public class RoundRobinRouter implements Router {
     }
 
     public RoundRobinRouter(List<LlmProvider> providers, GatewayTelemetry telemetry, GatewayTracing tracing) {
+        this(providers, telemetry, tracing, HEALTH_CACHE_TTL);
+    }
+
+    public RoundRobinRouter(List<LlmProvider> providers,
+                            GatewayTelemetry telemetry,
+                            GatewayTracing tracing,
+                            Duration healthCacheTtl) {
         this.providers = providers;
         this.telemetry = telemetry != null ? telemetry : GatewayTelemetry.noop();
         this.tracing = tracing != null ? tracing : GatewayTracing.noop();
+        this.healthCacheTtl = healthCacheTtl != null && !healthCacheTtl.isNegative() && !healthCacheTtl.isZero()
+            ? healthCacheTtl
+            : HEALTH_CACHE_TTL;
     }
     
     @Override
@@ -146,7 +157,7 @@ public class RoundRobinRouter implements Router {
         if (cached == null) {
             return true;
         }
-        if (cached.checkedAt().plus(HEALTH_CACHE_TTL).isBefore(Instant.now())) {
+        if (cached.checkedAt().plus(healthCacheTtl).isBefore(Instant.now())) {
             return true;
         }
         return cached.healthy();
@@ -199,5 +210,21 @@ public class RoundRobinRouter implements Router {
     @Override
     public List<LlmProvider> getProviders() {
         return providers;
+    }
+
+    @Override
+    public List<ProviderHealthSnapshot> getProviderHealthSnapshots() {
+        return providers.stream()
+            .map(provider -> {
+                var cached = healthCache.get(normalizeProvider(provider.providerId()));
+                return new ProviderHealthSnapshot(
+                    provider.providerId(),
+                    cached != null ? cached.healthy() : null,
+                    cached != null ? cached.checkedAt() : null,
+                    provider.supportsEmbeddings(),
+                    provider.supportsImageInputs()
+                );
+            })
+            .toList();
     }
 }

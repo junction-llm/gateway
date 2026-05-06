@@ -44,7 +44,9 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
         "junction.security.ip-rate-limit.enabled=false",
         "junction.security.ip-whitelist.enabled=true",
         "junction.security.ip-whitelist.allow-private-ips=false",
-        "junction.security.ip-whitelist.allowed-ips=203.0.113.10,198.51.100.0/24"
+        "junction.security.ip-whitelist.allowed-ips=203.0.113.10,198.51.100.0/24",
+        "junction.security.trusted-proxies.enabled=true",
+        "junction.security.trusted-proxies.allowed-ips=127.0.0.1"
     }
 )
 class GatewayIpWhitelistIntegrationTest {
@@ -62,7 +64,7 @@ class GatewayIpWhitelistIntegrationTest {
     }
 
     @Test
-    void acceptsExactWhitelistedIp() throws Exception {
+    void acceptsExactWhitelistedIpFromTrustedForwardingPeer() throws Exception {
         mockMvc.perform(post("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -74,7 +76,7 @@ class GatewayIpWhitelistIntegrationTest {
     }
 
     @Test
-    void acceptsCidrWhitelistedIp() throws Exception {
+    void acceptsCidrWhitelistedIpFromTrustedForwardingPeer() throws Exception {
         mockMvc.perform(post("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -86,7 +88,7 @@ class GatewayIpWhitelistIntegrationTest {
     }
 
     @Test
-    void rejectsIpOutsideWhitelist() throws Exception {
+    void rejectsIpOutsideWhitelistFromTrustedForwardingPeer() throws Exception {
         mockMvc.perform(post("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -96,6 +98,35 @@ class GatewayIpWhitelistIntegrationTest {
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.error.type").value("ip_not_allowed"))
             .andExpect(jsonPath("$.error.message").value(containsString("Access denied from IP: 192.0.2.50")));
+    }
+
+    @Test
+    void ignoresForwardedHeaderFromUntrustedDirectClient() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions")
+                .with(request -> {
+                    request.setRemoteAddr("192.0.2.50");
+                    return request;
+                })
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.AUTHORIZATION, bearer(VALID_API_KEY))
+                .header("X-Forwarded-For", "203.0.113.10")
+                .content(chatRequest()))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.error.type").value("ip_not_allowed"))
+            .andExpect(jsonPath("$.error.message").value(containsString("Access denied from IP: 192.0.2.50")));
+    }
+
+    @Test
+    void acceptsXRealIpOnlyFromTrustedForwardingPeer() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.AUTHORIZATION, bearer(VALID_API_KEY))
+                .header("X-Real-IP", "203.0.113.10")
+                .content(chatRequest()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.choices[0].message.content").value("Hello"));
     }
 
     private static String bearer(String apiKey) {
@@ -134,6 +165,7 @@ class GatewayIpWhitelistIntegrationTest {
             try {
                 server = HttpServer.create(new InetSocketAddress(0), 0);
                 server.createContext("/api/chat", this::handleChat);
+                server.createContext("/api/tags", this::handleTags);
                 server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
                 server.start();
             } catch (IOException e) {
@@ -150,6 +182,17 @@ class GatewayIpWhitelistIntegrationTest {
 
         String baseUrl() {
             return "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        private void handleTags(HttpExchange exchange) throws IOException {
+            byte[] response = """
+                {"models":[{"name":"test-model"}]}
+                """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream outputStream = exchange.getResponseBody()) {
+                outputStream.write(response);
+            }
         }
 
         private void handleChat(HttpExchange exchange) throws IOException {

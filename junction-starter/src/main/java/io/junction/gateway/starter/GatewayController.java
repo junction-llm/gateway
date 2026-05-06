@@ -87,6 +87,7 @@ public class GatewayController {
     private final Semaphore streamAdmission;
     private final ScheduledExecutorService streamIdleTimeoutExecutor;
     private final AtomicReference<ParsedIpWhitelist> parsedIpWhitelist = new AtomicReference<>(ParsedIpWhitelist.empty());
+    private final AtomicReference<ParsedIpWhitelist> parsedTrustedProxies = new AtomicReference<>(ParsedIpWhitelist.empty());
     
     @Autowired
     public GatewayController(Router router, 
@@ -112,6 +113,11 @@ public class GatewayController {
         this.streamIdleTimeoutExecutor = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual()
             .name("junction-stream-idle-timeout-", 0)
             .factory());
+    }
+
+    @PreDestroy
+    public void shutdownStreamIdleTimeoutExecutor() {
+        streamIdleTimeoutExecutor.shutdownNow();
     }
     
     /**
@@ -504,19 +510,75 @@ public class GatewayController {
      * @return the client IP address as a string
      */
     private String getClientIp(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-            return xForwardedFor.split(",")[0].trim();
+        String remoteAddr = request.getRemoteAddr();
+        if (!isTrustedForwardingPeer(remoteAddr)) {
+            return remoteAddr;
         }
-        
-        String xRealIp = request.getHeader("X-Real-IP");
-        if (xRealIp != null && !xRealIp.isBlank()) {
+
+        String xForwardedFor = firstForwardedIp(request.getHeader("X-Forwarded-For"));
+        if (xForwardedFor != null) {
+            return xForwardedFor;
+        }
+
+        String xRealIp = normalizeHeaderIp(request.getHeader("X-Real-IP"));
+        if (xRealIp != null) {
             return xRealIp;
         }
-        
-        return request.getRemoteAddr();
+
+        return remoteAddr;
     }
-    
+
+    private boolean isTrustedForwardingPeer(String remoteAddr) {
+        var trustedProxyConfig = junctionProperties.getSecurity().getTrustedProxies();
+        if (!trustedProxyConfig.isEnabled()) {
+            return false;
+        }
+
+        ParsedIpWhitelist trustedProxies = parsedTrustedProxiesFor(trustedProxyConfig.getAllowedIps());
+        if (trustedProxies.allowsAll()) {
+            return true;
+        }
+
+        Integer remoteIpv4 = parseIpv4(remoteAddr);
+        return trustedProxies.allows(remoteAddr, remoteIpv4);
+    }
+
+    private ParsedIpWhitelist parsedTrustedProxiesFor(String allowedIps) {
+        String normalized = allowedIps == null ? "" : allowedIps;
+        ParsedIpWhitelist current = parsedTrustedProxies.get();
+        if (current.source().equals(normalized)) {
+            return current;
+        }
+
+        ParsedIpWhitelist updated = ParsedIpWhitelist.parse(normalized);
+        if (parsedTrustedProxies.compareAndSet(current, updated)) {
+            return updated;
+        }
+        return parsedTrustedProxies.get();
+    }
+
+    private static String firstForwardedIp(String headerValue) {
+        if (headerValue == null || headerValue.isBlank()) {
+            return null;
+        }
+
+        for (String part : headerValue.split(",")) {
+            String normalized = normalizeHeaderIp(part);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeHeaderIp(String headerValue) {
+        if (headerValue == null) {
+            return null;
+        }
+        String normalized = headerValue.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
     private void logRequestDetails(ChatCompletionRequest request,
                                    ResolvedApiKey resolvedApiKey,
                                    String preferredProvider,
@@ -566,6 +628,10 @@ public class GatewayController {
     }
 
     private void logHeaderDetails(HttpServletRequest httpServletRequest) {
+        if (!log.isDebugEnabled()) {
+            return;
+        }
+
         log.debug("=== CLIENT DETECTION HEADERS ===");
         String[] clientHeaders = {
             "x-client-name",
@@ -665,8 +731,9 @@ public class GatewayController {
                     try {
                         log.info("[{}] Routing request", traceId);
                         var provider = router.route(patchedRequest, preferredProvider);
-                        log.info("[{}] Routed to provider: {}", traceId, provider.providerId());
-                        tracker.provider(provider.providerId());
+                        var providerId = provider.providerId();
+                        log.info("[{}] Routed to provider: {}", traceId, providerId);
+                        tracker.provider(providerId);
                         
                         var gatherer = provider.responseAdapter();
                         int chunkCount = 0;
@@ -690,8 +757,10 @@ public class GatewayController {
                                         responseAccumulator.append(chunk);
                                     }
 
+                                    long sendStartNanos = System.nanoTime();
                                     String jsonChunk = jsonMapper.writeValueAsString(chunk);
                                     emitter.send(SseEmitter.event().data(jsonChunk));
+                                    observabilityService.recordSseChunkSent(providerId, jsonChunk.length(), System.nanoTime() - sendStartNanos);
                                     lastStreamActivityMillis.set(System.currentTimeMillis());
                                     chunkCount++;
 
@@ -704,6 +773,7 @@ public class GatewayController {
                                     }
                                 } catch (IOException e) {
                                     tracker.finishFailure("stream_io_error");
+                                    observabilityService.recordSseTermination(providerId, "stream_io_error");
                                     log.error("[{}] IOException sending chunk: {}", traceId, e.getMessage());
                                     emitter.completeWithError(e);
                                     return;
@@ -713,6 +783,7 @@ public class GatewayController {
 
                         
                         if (cancelled.get()) {
+                            observabilityService.recordSseTermination(providerId, "cancelled");
                             log.info("[{}] SSE stream cancelled after {} chunks", traceId, chunkCount);
                             return;
                         }

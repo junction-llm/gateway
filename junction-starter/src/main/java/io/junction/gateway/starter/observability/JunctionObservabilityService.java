@@ -28,6 +28,39 @@ public class JunctionObservabilityService {
             .increment();
     }
 
+    public void recordSseChunkSent(String providerId, long bytes, long durationNanos) {
+        var provider = JunctionMetrics.tagValue(providerId, "gateway");
+        Counter.builder("junction.sse.chunks")
+            .description("SSE response chunks sent to clients")
+            .tag("provider", provider)
+            .register(meterRegistry)
+            .increment();
+
+        Timer.builder("junction.sse.send.duration")
+            .description("Duration spent serializing and sending SSE chunks to clients")
+            .tag("provider", provider)
+            .register(meterRegistry)
+            .record(durationNanos, TimeUnit.NANOSECONDS);
+
+        if (bytes >= 0) {
+            Counter.builder("junction.sse.bytes")
+                .description("Approximate SSE payload bytes sent to clients")
+                .tag("provider", provider)
+                .baseUnit("bytes")
+                .register(meterRegistry)
+                .increment(bytes);
+        }
+    }
+
+    public void recordSseTermination(String providerId, String outcome) {
+        Counter.builder("junction.sse.terminations")
+            .description("SSE stream termination outcomes")
+            .tag("provider", JunctionMetrics.tagValue(providerId, "gateway"))
+            .tag("outcome", JunctionMetrics.tagValue(outcome, "unknown"))
+            .register(meterRegistry)
+            .increment();
+    }
+
     public static final class RequestTracker {
         private final MeterRegistry meterRegistry;
         private final long startNanos = System.nanoTime();

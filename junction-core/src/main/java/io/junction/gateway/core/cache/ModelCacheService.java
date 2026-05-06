@@ -93,14 +93,21 @@ public class ModelCacheService {
             traceScope.tag("junction.provider", providerId);
             traceScope.tag("junction.provider_name", providerName);
             var models = fetcher.get();
+            if (models == null || models.isEmpty()) {
+                traceScope.tag("junction.outcome", "empty");
+                log.warn("Model refresh for {} returned no models; leaving existing cache unchanged", providerName);
+                return List.of();
+            }
+
             traceScope.tag("junction.outcome", "success");
             var expiry = Instant.now().plus(CACHE_TTL);
-            cache.put(providerId, new CacheEntry(models, expiry));
+            var cachedModels = List.copyOf(models);
+            cache.put(providerId, new CacheEntry(cachedModels, expiry));
 
             log.info("Cached {} models for {} (expires in {} hours)",
-                models.size(), providerName, CACHE_TTL.toHours());
+                cachedModels.size(), providerName, CACHE_TTL.toHours());
 
-            return models;
+            return cachedModels;
         } catch (RuntimeException ex) {
             try (var traceScope = tracing.startSpan("junction.model_cache.refresh.error")) {
                 traceScope.tag("junction.provider", providerId);

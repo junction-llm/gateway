@@ -120,7 +120,12 @@ public class JunctionAutoConfiguration {
             providers.add(ctx.getBean(GeminiProvider.class));
         }
         
-        return new RoundRobinRouter(providers, telemetry, tracing);
+        return new RoundRobinRouter(
+            providers,
+            telemetry,
+            tracing,
+            Duration.ofMillis(props.getObservability().getHealth().getProviderRefreshIntervalMillis() * 2)
+        );
     }
 
     @Bean
@@ -139,6 +144,11 @@ public class JunctionAutoConfiguration {
         return Gauge.builder("junction.model.cache.entries", modelCacheService, ModelCacheService::getCacheSize)
             .description("Number of provider model caches currently populated")
             .register(meterRegistry);
+    }
+
+    @Bean
+    public ProviderHealthRefresher providerHealthRefresher(Router router, JunctionProperties props) {
+        return new ProviderHealthRefresher(router, props.getObservability().getHealth());
     }
 
     @Bean
@@ -183,7 +193,8 @@ public class JunctionAutoConfiguration {
         return new IpRateLimiter(
             config.getRequestsPerMinute(),
             config.getRequestsPerHour(),
-            config.isEnabled()
+            config.isEnabled(),
+            config.getMaxIpStates()
         );
     }
     

@@ -24,6 +24,7 @@ import java.util.Map;
 @Service
 public class ClientCompatibilityService {
     private static final Logger log = LoggerFactory.getLogger(ClientCompatibilityService.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     
     private final ClientDetectionService detectionService;
     
@@ -334,8 +335,7 @@ public class ClientCompatibilityService {
                             .replace("\\\\", "\\")
                             .replace("\\\"", "\"");
                         
-                        var mapper = new tools.jackson.databind.ObjectMapper();
-                        JsonNode jsonNode = mapper.readTree(unescaped);
+                        JsonNode jsonNode = OBJECT_MAPPER.readTree(unescaped);
                         
                         var newFunction = new ChatCompletionChunk.ToolCall.Function(
                             toolCall.function().name(),

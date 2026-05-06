@@ -86,9 +86,16 @@ public final class ApiKey {
     }
     
     public ApiKey withUsageUpdate() {
+        return withUsageUpdate(1L);
+    }
+
+    public ApiKey withUsageUpdate(long count) {
+        if (count < 1L) {
+            throw new IllegalArgumentException("count must be greater than zero");
+        }
         return new Builder(this)
             .lastUsedAt(Instant.now())
-            .requestCount(this.requestCount + 1)
+            .requestCount(this.requestCount + count)
             .build();
     }
     

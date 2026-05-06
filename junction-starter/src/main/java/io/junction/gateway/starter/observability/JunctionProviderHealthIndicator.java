@@ -1,6 +1,5 @@
 package io.junction.gateway.starter.observability;
 
-import io.junction.gateway.core.provider.LlmProvider;
 import io.junction.gateway.core.router.Router;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -17,7 +16,7 @@ public class JunctionProviderHealthIndicator implements HealthIndicator {
 
     @Override
     public Health health() {
-        var providers = router.getProviders();
+        var providers = router.getProviderHealthSnapshots();
         if (providers.isEmpty()) {
             return Health.unknown()
                 .withDetail("configuredProviders", 0)
@@ -27,18 +26,21 @@ public class JunctionProviderHealthIndicator implements HealthIndicator {
 
         var providerDetails = new LinkedHashMap<String, Object>();
         var anyHealthy = false;
-        for (LlmProvider provider : providers) {
-            var healthy = provider.isHealthy();
-            anyHealthy |= healthy;
+        var anyUnknown = false;
+        for (var provider : providers) {
+            var healthy = provider.healthy();
+            anyHealthy |= Boolean.TRUE.equals(healthy);
+            anyUnknown |= healthy == null;
 
-            providerDetails.put(provider.providerId(), Map.of(
-                "healthy", healthy,
-                "supportsEmbeddings", provider.supportsEmbeddings(),
-                "supportsImageInputs", provider.supportsImageInputs()
-            ));
+            var details = new LinkedHashMap<String, Object>();
+            details.put("healthy", healthy != null ? healthy : "unknown");
+            details.put("checkedAt", provider.checkedAt());
+            details.put("supportsEmbeddings", provider.supportsEmbeddings());
+            details.put("supportsImageInputs", provider.supportsImageInputs());
+            providerDetails.put(provider.providerId(), details);
         }
 
-        var builder = anyHealthy ? Health.up() : Health.down();
+        var builder = anyHealthy ? Health.up() : (anyUnknown ? Health.unknown() : Health.down());
         return builder
             .withDetail("configuredProviders", providers.size())
             .withDetail("providers", providerDetails)

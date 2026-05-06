@@ -94,17 +94,32 @@ public class InMemoryApiKeyRepository implements ApiKeyRepository {
     
     @Override
     public ApiKey incrementUsage(String id) {
-        ApiKey existing = keysById.get(id);
-        if (existing == null) {
-            throw new ApiKeyNotFoundException(id);
+        return incrementUsage(id, 1L);
+    }
+
+    @Override
+    public void incrementUsageBatch(Map<String, Long> usageCounts) {
+        if (usageCounts == null || usageCounts.isEmpty()) {
+            return;
         }
-        
-        ApiKey updated = existing.withUsageUpdate();
-        
-        keysById.put(id, updated);
+        usageCounts.forEach((id, count) -> {
+            if (count != null && count > 0L) {
+                incrementUsage(id, count);
+            }
+        });
+    }
+
+    private ApiKey incrementUsage(String id, long count) {
+        ApiKey updated = keysById.compute(id, (key, existing) -> {
+            if (existing == null) {
+                throw new ApiKeyNotFoundException(id);
+            }
+            return existing.withUsageUpdate(count);
+        });
+
         keysByHash.put(updated.keyHash(), updated);
         keysByPrefix.put(updated.keyPrefix(), updated);
-        
+
         return updated;
     }
     

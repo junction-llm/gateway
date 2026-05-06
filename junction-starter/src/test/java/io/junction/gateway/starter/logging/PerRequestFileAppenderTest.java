@@ -19,6 +19,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 class PerRequestFileAppenderTest {
 
@@ -87,6 +88,41 @@ class PerRequestFileAppenderTest {
 
         assertTrue(Files.exists(logFile("2026-01-14", beforeMidnightTraceId)));
         assertTrue(Files.exists(logFile("2026-01-15", afterMidnightTraceId)));
+    }
+
+
+    @Test
+    void boundsActiveRequestWritersAndRejectsNewTraceIds() throws IOException {
+        UUID acceptedTraceId = UUID.randomUUID();
+        UUID rejectedTraceId = UUID.randomUUID();
+        PerRequestFileAppender appender = new PerRequestFileAppender();
+        appender.setBasePath(tempDir.toString());
+        appender.setMaxActiveWriters(1);
+        appender.start();
+
+        appender.doAppend(logFileEvent(acceptedTraceId, Instant.parse("2026-01-15T12:00:00Z"), "accepted"));
+        appender.doAppend(logFileEvent(rejectedTraceId, Instant.parse("2026-01-15T12:00:01Z"), "rejected"));
+        appender.stop();
+
+        assertEquals(1, appender.getRejectedTraceIds());
+        assertTrue(Files.exists(logFile("2026-01-15", acceptedTraceId)));
+        assertFalse(Files.exists(logFile("2026-01-15", rejectedTraceId)));
+    }
+
+    @Test
+    void acceptsInvalidBoundsByFallingBackToDefaults() {
+        UUID traceId = UUID.randomUUID();
+        PerRequestFileAppender appender = new PerRequestFileAppender();
+        appender.setBasePath(tempDir.toString());
+        appender.setMaxActiveWriters(0);
+        appender.setQueueCapacity(0);
+        appender.setFlushIntervalMillis(0);
+
+        assertDoesNotThrow(() -> {
+            appender.start();
+            appender.doAppend(logFileEvent(traceId, Instant.parse("2026-01-15T12:00:00Z"), "fallback"));
+            appender.stop();
+        });
     }
 
     private void appendAndStop(LoggingEvent... events) {

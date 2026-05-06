@@ -85,6 +85,24 @@ public class JunctionProperties {
     }
     
     
+    public static class Health {
+        /** Whether provider health is refreshed in a background lifecycle task */
+        private boolean providerRefreshEnabled = true;
+
+        /** Provider health refresh interval in milliseconds */
+        private long providerRefreshIntervalMillis = 30_000;
+
+        /** Whether to run one provider health refresh during application startup */
+        private boolean providerRefreshOnStartup = true;
+
+        public boolean isProviderRefreshEnabled() { return providerRefreshEnabled; }
+        public void setProviderRefreshEnabled(boolean providerRefreshEnabled) { this.providerRefreshEnabled = providerRefreshEnabled; }
+        public long getProviderRefreshIntervalMillis() { return providerRefreshIntervalMillis; }
+        public void setProviderRefreshIntervalMillis(long providerRefreshIntervalMillis) { this.providerRefreshIntervalMillis = providerRefreshIntervalMillis; }
+        public boolean isProviderRefreshOnStartup() { return providerRefreshOnStartup; }
+        public void setProviderRefreshOnStartup(boolean providerRefreshOnStartup) { this.providerRefreshOnStartup = providerRefreshOnStartup; }
+    }
+
     public static class Streaming {
         /** SSE emitter timeout in milliseconds; zero or negative disables the timeout */
         private long sseTimeoutMillis = 300_000;
@@ -109,6 +127,7 @@ public class JunctionProperties {
         private ApiKey apiKey = new ApiKey();
         private IpRateLimit ipRateLimit = new IpRateLimit();
         private IpWhitelist ipWhitelist = new IpWhitelist();
+        private TrustedProxies trustedProxies = new TrustedProxies();
         
         public ApiKey getApiKey() { return apiKey; }
         public void setApiKey(ApiKey apiKey) { this.apiKey = apiKey; }
@@ -118,6 +137,9 @@ public class JunctionProperties {
         
         public IpWhitelist getIpWhitelist() { return ipWhitelist; }
         public void setIpWhitelist(IpWhitelist ipWhitelist) { this.ipWhitelist = ipWhitelist; }
+
+        public TrustedProxies getTrustedProxies() { return trustedProxies; }
+        public void setTrustedProxies(TrustedProxies trustedProxies) { this.trustedProxies = trustedProxies; }
     }
     
     public static class ApiKey {
@@ -262,18 +284,37 @@ public class JunctionProperties {
         private boolean enabled = true;
         private int requestsPerMinute = 60;
         private int requestsPerHour = 1000;
-        
+        /** Maximum distinct public IP states retained by the in-memory IP limiter */
+        private int maxIpStates = 100_000;
+
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
-        
+
         public int getRequestsPerMinute() { return requestsPerMinute; }
         public void setRequestsPerMinute(int requestsPerMinute) { this.requestsPerMinute = requestsPerMinute; }
-        
+
         public int getRequestsPerHour() { return requestsPerHour; }
         public void setRequestsPerHour(int requestsPerHour) { this.requestsPerHour = requestsPerHour; }
+
+        public int getMaxIpStates() { return maxIpStates; }
+        public void setMaxIpStates(int maxIpStates) { this.maxIpStates = maxIpStates; }
     }
-    
-    
+
+
+    public static class TrustedProxies {
+        /** Whether X-Forwarded-For and X-Real-IP headers may be used when the immediate peer is trusted */
+        private boolean enabled = true;
+
+        /** Exact IPs or IPv4 CIDR ranges for trusted reverse proxies/load balancers */
+        private String allowedIps = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public String getAllowedIps() { return allowedIps; }
+        public void setAllowedIps(String allowedIps) { this.allowedIps = allowedIps; }
+    }
+
     public static class IpWhitelist {
         private boolean enabled = false;
         private String allowedIps = "${JUNCTION_IP_WHITELIST:}";
@@ -327,10 +368,13 @@ public class JunctionProperties {
 
     public static class Observability {
         private Admin admin = new Admin();
+        private Health health = new Health();
         private ManagementSecurity security = new ManagementSecurity();
 
         public Admin getAdmin() { return admin; }
         public void setAdmin(Admin admin) { this.admin = admin; }
+        public Health getHealth() { return health; }
+        public void setHealth(Health health) { this.health = health; }
 
         public ManagementSecurity getSecurity() { return security; }
         public void setSecurity(ManagementSecurity security) { this.security = security; }

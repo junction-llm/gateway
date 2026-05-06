@@ -37,6 +37,47 @@ class ModelCacheServiceTest {
         assertEquals(List.of("ollama", "all"), telemetry.cacheEvictions);
     }
 
+
+    @Test
+    void emptyRefreshResultIsNotCached() {
+        var cacheService = new ModelCacheService();
+        var fetches = new AtomicInteger();
+
+        var first = cacheService.getModels("ollama", "Ollama", () -> {
+            fetches.incrementAndGet();
+            return List.of();
+        });
+        var second = cacheService.getModels("ollama", "Ollama", () -> {
+            fetches.incrementAndGet();
+            return List.of(ModelInfo.of("recovered-model", Map.of("owned_by", "test")));
+        });
+
+        assertEquals(List.of(), first);
+        assertEquals(List.of(ModelInfo.of("recovered-model", Map.of("owned_by", "test"))), second);
+        assertEquals(2, fetches.get());
+        assertEquals(1, cacheService.getCacheSize());
+    }
+
+    @Test
+    void nullRefreshResultIsNotCached() {
+        var cacheService = new ModelCacheService();
+        var fetches = new AtomicInteger();
+
+        var first = cacheService.getModels("gemini", "Gemini", () -> {
+            fetches.incrementAndGet();
+            return null;
+        });
+        var second = cacheService.getModels("gemini", "Gemini", () -> {
+            fetches.incrementAndGet();
+            return List.of(ModelInfo.of("gemini-pro", Map.of("owned_by", "google")));
+        });
+
+        assertEquals(List.of(), first);
+        assertEquals(List.of(ModelInfo.of("gemini-pro", Map.of("owned_by", "google"))), second);
+        assertEquals(2, fetches.get());
+        assertEquals(1, cacheService.getCacheSize());
+    }
+
     @Test
     void concurrentCacheMissesCollapseIntoOneProviderFetch() throws Exception {
         var cacheService = new ModelCacheService();

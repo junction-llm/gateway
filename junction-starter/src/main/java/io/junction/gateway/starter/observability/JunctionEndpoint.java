@@ -1,7 +1,6 @@
 package io.junction.gateway.starter.observability;
 
 import io.junction.gateway.core.cache.ModelCacheService;
-import io.junction.gateway.core.provider.LlmProvider;
 import io.junction.gateway.core.router.Router;
 import io.junction.gateway.core.security.ApiKey;
 import io.junction.gateway.core.security.ApiKeyRepository;
@@ -9,6 +8,7 @@ import io.junction.gateway.starter.JunctionProperties;
 import org.springframework.boot.actuate.endpoint.annotation.Endpoint;
 import org.springframework.boot.actuate.endpoint.annotation.ReadOperation;
 
+import java.time.Instant;
 import java.util.List;
 
 @Endpoint(id = "junction")
@@ -30,10 +30,11 @@ public class JunctionEndpoint {
 
     @ReadOperation
     public JunctionSnapshot snapshot() {
-        var providers = router.getProviders().stream()
+        var providers = router.getProviderHealthSnapshots().stream()
             .map(provider -> new ProviderSnapshot(
                 provider.providerId(),
-                provider.isHealthy(),
+                provider.healthy(),
+                provider.checkedAt(),
                 provider.supportsEmbeddings(),
                 provider.supportsImageInputs()
             ))
@@ -69,7 +70,8 @@ public class JunctionEndpoint {
 
     public record ProviderSnapshot(
         String providerId,
-        boolean healthy,
+        Boolean healthy,
+        Instant checkedAt,
         boolean supportsEmbeddings,
         boolean supportsImageInputs
     ) {

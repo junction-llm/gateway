@@ -6,9 +6,9 @@ Junction is an OpenAI-compatible LLM gateway for the JVM. It exposes `/v1/chat/c
 
 ## Status
 
-`v0.0.5` is the current public release.
+`v0.0.6` is the current public release.
 
-What is ready in `v0.0.5`:
+What is ready in `v0.0.6`:
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-compatible `GET /v1/models`
 - OpenAI-compatible `POST /v1/embeddings`
@@ -30,7 +30,7 @@ What is ready in `v0.0.5`:
 - Distributed tracing export through OTLP plus protected `/actuator/prometheus` support
 - Stable gateway correlation via `X-Trace-ID`, with distributed trace/span IDs exposed separately in logs as `otelTraceId` and `otelSpanId`
 
-What is not in `v0.0.5`:
+What is not in `v0.0.6`:
 - Advanced routing strategies beyond round-robin
 - `dimensions` support for `/v1/embeddings`
 - Full OpenAI API surface outside chat, models, and embeddings
@@ -49,7 +49,7 @@ What is not in `v0.0.5`:
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Ollama | Supported | Best-tested path for `0.0.5`|
+| Ollama | Supported | Best-tested path for `0.0.6`|
 | Gemini | Supported | Optional, requires `GEMINI_API_KEY` |
 
 ## Quick Start
@@ -204,7 +204,7 @@ Important settings:
 - `junction.security.api-key.required`: require API keys
 - `junction.security.api-key.preconfigured`: startup seed keys; additive across all storage backends
 - `junction.security.api-key.storage`: storage type (`memory`, `file`, `h2`, `postgresql`)
-- `junction.security.ip-rate-limit.*`: per-IP throttling
+- `junction.security.ip-rate-limit.*`: per-IP throttling, including `max-ip-states` to bound tracked public IP state; defaults to `100000`
 - `junction.security.ip-whitelist.*`: optional IP allowlisting with CIDR support
 - `junction.streaming.sse-timeout-millis`: SSE stream timeout; defaults to `300000` (5 minutes), use `0` to disable
 - `junction.streaming.max-active-streams`: maximum concurrently active SSE streams; defaults to `1000`, use `0` to disable
@@ -343,7 +343,7 @@ If you override the default Logback configuration, keep the dedicated `io.juncti
 ## Production Notes
 
 - The sample application is a demo and reference app, not a managed production distribution.
-- The public `0.0.5` release stores API keys `in-memory`, `file`, `h2`, and `postgresql`.
+- The public `0.0.6` release stores API keys `in-memory`, `file`, `h2`, and `postgresql`.
 - The deployment files in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`Caddyfile`](Caddyfile), and [`docker-compose.caddy.yml`](docker-compose.caddy.yml) are example assets and should be customized before public deployment.
 - Per-request logs are written under `logs/` relative to the app working directory. The dated folder name follows the JVM/system default timezone, and each log line timestamp remains UTC. For the sample app, that is typically `junction-samples/logs/`.
 
@@ -356,7 +356,7 @@ If you override the default Logback configuration, keep the dedicated `io.juncti
 
 ## Compatibility Matrix
 
-| Area | `0.0.5` |
+| Area | `0.0.6` |
 |------|---------|
 | Java runtime | Java 25 |
 | Build tool | Maven reactor |

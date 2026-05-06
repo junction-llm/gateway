@@ -340,7 +340,7 @@ class GatewayIntegrationTest {
         }
 
         private void handleTags(HttpExchange exchange) throws IOException {
-            byte[] response = "{\"models\":[]}".getBytes(StandardCharsets.UTF_8);
+            byte[] response = "{\"models\":[{\"name\":\"test-model\"}]}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
             try (OutputStream outputStream = exchange.getResponseBody()) {

@@ -42,6 +42,7 @@ public final class OllamaProvider implements LlmProvider {
     private static final int DEFAULT_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
     private static final int REMOTE_IMAGE_READ_BUFFER_BYTES = 8192;
     private static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
+    private static final int MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024;
     private final HttpClient client;
     private final String baseUrl;
     private final String defaultModel;
@@ -137,12 +138,11 @@ public final class OllamaProvider implements LlmProvider {
         var startNanos = System.nanoTime();
         var traceId = RequestContext.Context.current().traceId();
         var traceScope = tracing.startSpan("junction.provider.chat");
-        
+
         var model = request.model() != null ? request.model() : defaultModel;
-        var messagesPayload = formatMessages(request.messages());
         var stream = request.stream();
         var temp = request.temperature() != null ? request.temperature() : 0.3;
-        
+
         var hasImageInputs = request.messages() != null
             && request.messages().stream().anyMatch(ChatCompletionRequest.Message::hasImageParts);
 
@@ -150,49 +150,9 @@ public final class OllamaProvider implements LlmProvider {
         traceScope.tag("junction.operation", "chat");
         traceScope.tag("junction.model", model);
         traceScope.tag("junction.stream", Boolean.toString(stream));
-        
-        log.info("[{}] OllamaProvider executing request: model={}, stream={}, temp={}, image_inputs={}", 
-                traceId, model, stream, temp, hasImageInputs);
-        
-        var requestBody = Map.<String, Object>of(
-            "model", model,
-            "messages", messagesPayload,
-            "stream", stream,
-            "options", Map.of("temperature", temp)
-        );
-        
-        String json;
-        try {
-            json = serializeRequestBody(requestBody);
-        } catch (ProviderException e) {
-            traceScope.tag("junction.outcome", "serialize_error");
-            traceScope.error(e);
-            telemetry.recordProviderRequest(providerId(), "chat", "serialize_error", System.nanoTime() - startNanos);
-            traceScope.close();
-            return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
-        }
-        
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Sending request to Ollama at {} (messages={}, image_inputs={})",
-                traceId, baseUrl, messagesPayload.size(), hasImageInputs);
-            log.debug("[{}] Request message preview: {}", traceId, buildDebugMessages(request.messages(), true));
-        }
 
-        if (payloadLog.isDebugEnabled()) {
-            payloadLog.debug("[{}] Request messages (text-only, image payload omitted): {}", traceId,
-                buildDebugMessages(request.messages(), false));
-        }
-            
-        log.debug("[{}] Request target model: {}", traceId, model);
-        
-        var httpReqBuilder = HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/chat"))
-            .header("Content-Type", "application/json")
-            .header("X-Trace-ID", traceId.toString())
-            .timeout(requestTimeout)
-            .POST(HttpRequest.BodyPublishers.ofString(json));
-        traceScope.propagationHeaders().forEach(httpReqBuilder::header);
-        var httpReq = httpReqBuilder.build();
+        log.info("[{}] OllamaProvider executing request: model={}, stream={}, temp={}, image_inputs={}",
+                traceId, model, stream, temp, hasImageInputs);
 
         if (!requestBulkhead.tryAcquire()) {
             traceScope.tag("junction.outcome", "overloaded");
@@ -202,14 +162,46 @@ public final class OllamaProvider implements LlmProvider {
         }
 
         try {
+            var messagesPayload = formatMessages(request.messages());
+            var requestBody = Map.<String, Object>of(
+                "model", model,
+                "messages", messagesPayload,
+                "stream", stream,
+                "options", Map.of("temperature", temp)
+            );
+
+            var json = serializeRequestBody(requestBody);
+
+            if (log.isDebugEnabled()) {
+                log.debug("[{}] Sending request to Ollama at {} (messages={}, image_inputs={})",
+                    traceId, baseUrl, messagesPayload.size(), hasImageInputs);
+                log.debug("[{}] Request message preview: {}", traceId, buildDebugMessages(request.messages(), true));
+            }
+
+            if (payloadLog.isDebugEnabled()) {
+                payloadLog.debug("[{}] Request messages (text-only, image payload omitted): {}", traceId,
+                    buildDebugMessages(request.messages(), false));
+            }
+
+            log.debug("[{}] Request target model: {}", traceId, model);
+
+            var httpReqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/chat"))
+                .header("Content-Type", "application/json")
+                .header("X-Trace-ID", traceId.toString())
+                .timeout(requestTimeout)
+                .POST(HttpRequest.BodyPublishers.ofString(json));
+            traceScope.propagationHeaders().forEach(httpReqBuilder::header);
+            var httpReq = httpReqBuilder.build();
+
             log.debug("[{}] Sending request to Ollama at: {}", traceId, baseUrl);
             var response = client.send(httpReq, HttpResponse.BodyHandlers.ofInputStream());
-            
+
             if (response.statusCode() != 200) {
                 log.error("[{}] Ollama returned HTTP error: {}", traceId, response.statusCode());
                 String errorBody;
                 try (var body = response.body()) {
-                    errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+                    errorBody = readBoundedUtf8(body, MAX_PROVIDER_ERROR_BODY_BYTES);
                 }
                 log.error("[{}] Error response body: {}", traceId, errorBody);
                 traceScope.tag("junction.outcome", "http_error");
@@ -222,13 +214,13 @@ public final class OllamaProvider implements LlmProvider {
                 traceScope.close();
                 requestBulkhead.release();
                 return Stream.of(new ProviderResponse.ErrorResponse(
-                    "Ollama error: HTTP " + response.statusCode() + " - " + errorBody, 
+                    "Ollama error: HTTP " + response.statusCode() + " - " + errorBody,
                     response.statusCode()));
             }
-            
+
             log.debug("[{}] Received successful response from Ollama, parsing NDJSON stream", traceId);
             return releaseOnClose(instrumentStream(parseNdJson(response.body(), traceId), "chat", startNanos, traceScope));
-            
+
         } catch (java.net.http.HttpTimeoutException e) {
             log.error("[{}] Timeout calling Ollama: {}", traceId, e.getMessage());
             traceScope.tag("junction.outcome", "timeout");
@@ -311,22 +303,27 @@ public final class OllamaProvider implements LlmProvider {
                 log.info("[{}] OllamaProvider embedding request: model={}, inputs={}",
                     traceId, model, request.input().size());
 
-                var response = client.send(httpReq, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 200) {
-                    traceScope.tag("junction.outcome", "http_error");
-                    traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
-                    traceScope.error(new ProviderException(
-                        "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
-                        response.statusCode()
-                    ));
-                    telemetry.recordProviderRequest(providerId(), "embeddings", "http_error", System.nanoTime() - startNanos);
-                    throw new ProviderException(
-                        "Ollama embeddings error: HTTP " + response.statusCode() + " - " + response.body(),
-                        response.statusCode()
-                    );
+                var response = client.send(httpReq, HttpResponse.BodyHandlers.ofInputStream());
+                String responseBody;
+                try (var body = response.body()) {
+                    if (response.statusCode() != 200) {
+                        var errorBody = readBoundedUtf8(body, MAX_PROVIDER_ERROR_BODY_BYTES);
+                        traceScope.tag("junction.outcome", "http_error");
+                        traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
+                        traceScope.error(new ProviderException(
+                            "Ollama embeddings error: HTTP " + response.statusCode() + " - " + errorBody,
+                            response.statusCode()
+                        ));
+                        telemetry.recordProviderRequest(providerId(), "embeddings", "http_error", System.nanoTime() - startNanos);
+                        throw new ProviderException(
+                            "Ollama embeddings error: HTTP " + response.statusCode() + " - " + errorBody,
+                            response.statusCode()
+                        );
+                    }
+                    responseBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
                 }
 
-                var embeddingResponse = parseEmbeddingResponse(response.body(), model, request.encodingFormat(), traceId);
+                var embeddingResponse = parseEmbeddingResponse(responseBody, model, request.encodingFormat(), traceId);
                 traceScope.tag("junction.outcome", "success");
                 telemetry.recordProviderRequest(providerId(), "embeddings", "success", System.nanoTime() - startNanos);
                 return embeddingResponse;
@@ -442,8 +439,7 @@ public final class OllamaProvider implements LlmProvider {
             .lines()
             .map(line -> {
                 try {
-                    var mapper = new tools.jackson.databind.ObjectMapper();
-                    var node = mapper.readTree(line);
+                    var node = OBJECT_MAPPER.readTree(line);
                     
                     var content = node.path("message").path("content").asText("");
                     var thinking = node.path("message").path("thinking").asText("");
@@ -676,6 +672,17 @@ public final class OllamaProvider implements LlmProvider {
             .toList();
     }
     
+    private static String readBoundedUtf8(InputStream inputStream, int maxBytes) throws IOException {
+        byte[] bytes = inputStream.readNBytes(maxBytes + 1);
+        boolean truncated = bytes.length > maxBytes;
+        int length = truncated ? maxBytes : bytes.length;
+        String body = new String(bytes, 0, length, StandardCharsets.UTF_8);
+        if (truncated) {
+            return body + "... [truncated after " + maxBytes + " bytes]";
+        }
+        return body;
+    }
+
     private String normalizeImageInput(String imageSource) {
         if (imageSource == null || imageSource.isBlank()) {
             throw new ProviderException("Image source cannot be blank.", 400);
@@ -697,20 +704,44 @@ public final class OllamaProvider implements LlmProvider {
         if (commaIndex < 0 || commaIndex == dataUrl.length() - 1) {
             throw new ProviderException("Invalid data URL image format: missing base64 payload.", 400);
         }
-        
+
         var metadata = dataUrl.substring(0, commaIndex).toLowerCase();
         var base64Payload = dataUrl.substring(commaIndex + 1);
-        
-        if (!metadata.contains(";base64")) {
-            throw new ProviderException("Only base64 data URLs are supported for images.", 400);
+
+        if (!metadata.startsWith("data:image/") || !metadata.contains(";base64")) {
+            throw new ProviderException("Only base64 image data URLs are supported.", 400);
         }
-        
+
+        var estimatedBytes = estimateDecodedBase64Bytes(base64Payload);
+        if (estimatedBytes > maxRemoteImageBytes) {
+            throw new ProviderException("Image data URL exceeds maximum size of " + maxRemoteImageBytes + " bytes.", 400);
+        }
+
         try {
-            Base64.getDecoder().decode(base64Payload);
+            byte[] decoded = Base64.getDecoder().decode(base64Payload);
+            if (decoded.length > maxRemoteImageBytes) {
+                throw new ProviderException("Image data URL exceeds maximum size of " + maxRemoteImageBytes + " bytes.", 400);
+            }
             return base64Payload;
         } catch (IllegalArgumentException e) {
             throw new ProviderException("Invalid base64 payload in image data URL.", 400);
         }
+    }
+
+    private long estimateDecodedBase64Bytes(String base64Payload) {
+        var length = base64Payload.length();
+        if (length == 0) {
+            return 0;
+        }
+
+        var padding = 0;
+        if (base64Payload.charAt(length - 1) == '=') {
+            padding++;
+            if (length > 1 && base64Payload.charAt(length - 2) == '=') {
+                padding++;
+            }
+        }
+        return ((long) length * 3L + 3L) / 4L - padding;
     }
     
     private static Duration requirePositive(Duration duration, String name) {

@@ -11,6 +11,7 @@ import io.junction.gateway.core.telemetry.GatewayTelemetry;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -280,9 +281,60 @@ class RoundRobinRouterTest {
         assertThrows(NoProviderAvailableException.class, () -> router.route(request, "ollama"));
     }
 
+
+    @Test
+    void providerHealthSnapshotsExposeCachedHealthWithoutLiveChecks() {
+        var router = new RoundRobinRouter(List.of(
+            new OllamaProvider("http://127.0.0.1:1", "qwen3.5"),
+            new GeminiProvider("test-api-key", "gemini-1.5-flash")
+        ));
+
+        router.updateHealth("ollama", false);
+
+        var snapshots = router.getProviderHealthSnapshots();
+
+        assertEquals(2, snapshots.size());
+        var ollama = snapshots.stream()
+            .filter(snapshot -> snapshot.providerId().equals("ollama"))
+            .findFirst()
+            .orElseThrow();
+        var gemini = snapshots.stream()
+            .filter(snapshot -> snapshot.providerId().equals("gemini"))
+            .findFirst()
+            .orElseThrow();
+        assertEquals(false, ollama.healthy());
+        assertEquals(true, ollama.supportsImageInputs());
+        assertEquals(null, gemini.healthy());
+    }
+
+    @Test
+    @Timeout(5)
+    void refreshHealthUpdatesCacheFromBackgroundCallerOnly() throws IOException {
+        var healthChecks = new AtomicInteger();
+        var server = startOllamaHealthServer(healthChecks);
+        try {
+            var router = new RoundRobinRouter(List.of(
+                new OllamaProvider("http://127.0.0.1:" + server.getAddress().getPort(), "qwen3.5")
+            ));
+
+            router.refreshHealth();
+
+            assertEquals(1, healthChecks.get());
+            var snapshot = router.getProviderHealthSnapshots().getFirst();
+            assertEquals(true, snapshot.healthy());
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private HttpServer startOllamaHealthServer() throws IOException {
+        return startOllamaHealthServer(new AtomicInteger());
+    }
+
+    private HttpServer startOllamaHealthServer(AtomicInteger healthChecks) throws IOException {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/tags", exchange -> {
+            healthChecks.incrementAndGet();
             byte[] body = "{\"models\":[]}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, body.length);

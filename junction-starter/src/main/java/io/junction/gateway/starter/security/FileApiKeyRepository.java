@@ -125,6 +125,21 @@ public final class FileApiKeyRepository implements ApiKeyRepository {
         }
     }
 
+    @Override
+    public synchronized void incrementUsageBatch(Map<String, Long> usageCounts) {
+        if (usageCounts == null || usageCounts.isEmpty()) {
+            return;
+        }
+        try {
+            delegate.incrementUsageBatch(usageCounts);
+            writeSnapshot();
+        } catch (ApiKeyNotFoundException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw storageFailure("Failed to update API key usage batch in file storage", e);
+        }
+    }
+
     private synchronized void loadFromDisk() {
         delegate.clear();
 

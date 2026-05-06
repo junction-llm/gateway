@@ -1,13 +1,13 @@
 # API Key Security
 
-> Version: `0.0.5`
+> Version: `0.0.6`
 > Main branch status: `memory`, `file`, `h2`, and `postgresql` backends are available.  
 
 ## Overview
 
 Junction Gateway includes API key validation for the protected chat completions, embeddings, and model listing endpoints.
 
-Supported in `0.0.5`:
+Supported in `0.0.6`:
 - In-memory API key storage
 - File-backed API key storage
 - H2-backed API key storage
@@ -19,7 +19,7 @@ Supported in `0.0.5`:
 - Optional per-key model restrictions
 - OpenAI-style error responses
 
-Not yet implemented in `0.0.5`:
+Not yet implemented in `0.0.6`:
 - Rate limit response headers
 
 ## Quick Start
@@ -36,7 +36,7 @@ junction:
           tier: ENTERPRISE
 ```
 
-Persistent backends in `0.0.5`:
+Persistent backends in `0.0.6`:
 
 ```yaml
 junction:
@@ -159,7 +159,7 @@ junc_aB3dE5fG7hI9jK1lM2nO3pQ4rS5tU6vW7xY8zA0
 
 ## Current Storage Model
 
-Available backends on `0.0.5`:
+Available backends on `0.0.6`:
 - `memory`: keys are lost on restart
 - `file`: YAML-backed storage with write-through updates for key changes and usage counts
 - `h2`: JDBC-backed persistent storage

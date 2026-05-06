@@ -1,6 +1,7 @@
 package io.junction.gateway.core.security;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -108,6 +109,32 @@ public interface ApiKeyRepository {
      * @throws ApiKeyNotFoundException if key not found
      */
     ApiKey incrementUsage(String id);
+
+    /**
+     * Updates usage statistics for multiple API keys. Implementations should
+     * coalesce each entry into one storage operation per API key where possible.
+     *
+     * <p>The default implementation preserves compatibility by replaying
+     * {@link #incrementUsage(String)} for each requested count.
+     *
+     * @param usageCounts map of API key ID to positive usage count
+     * @throws ApiKeyStorageException if storage operation fails
+     * @throws ApiKeyNotFoundException if a key is not found
+     */
+    default void incrementUsageBatch(Map<String, Long> usageCounts) {
+        if (usageCounts == null || usageCounts.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Long> entry : usageCounts.entrySet()) {
+            long count = entry.getValue() != null ? entry.getValue() : 0L;
+            if (count < 1L) {
+                continue;
+            }
+            for (long i = 0; i < count; i++) {
+                incrementUsage(entry.getKey());
+            }
+        }
+    }
     
     /**
     * Revokes an API key by setting its status to REVOKED.

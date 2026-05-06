@@ -137,6 +137,122 @@ class OllamaProviderTest {
     }
 
     @Test
+    void testResolveImageToBase64_RejectsOversizedDataUrlBeforeDecode() throws Exception {
+        var limitedProvider = new OllamaProvider(
+            "http://localhost:9999",
+            "llama3.1",
+            null,
+            null,
+            3,
+            Duration.ofSeconds(10),
+            Duration.ofMinutes(5),
+            100,
+            true
+        );
+
+        InvocationTargetException ex = assertThrows(
+            InvocationTargetException.class,
+            () -> invokeNormalizeImage(limitedProvider, "data:image/png;base64," + Base64.getEncoder().encodeToString("four".getBytes(StandardCharsets.UTF_8)))
+        );
+        assertTrue(ex.getCause() instanceof ProviderException);
+        assertTrue(ex.getCause().getMessage().contains("maximum size"));
+    }
+
+    @Test
+    void testChatBulkheadRejectsImageRequestBeforeRemoteImageFetch() throws Exception {
+        var firstResponseStarted = new java.util.concurrent.CountDownLatch(1);
+        var releaseFirstResponse = new java.util.concurrent.CountDownLatch(1);
+        var chatRequestCount = new java.util.concurrent.atomic.AtomicInteger();
+        var imageRequestCount = new java.util.concurrent.atomic.AtomicInteger();
+
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/chat", exchange -> {
+            chatRequestCount.incrementAndGet();
+            byte[] body = "{\"message\":{\"content\":\"hello\"},\"done\":false}\n".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/x-ndjson");
+            exchange.sendResponseHeaders(200, 0);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(body);
+                responseBody.flush();
+                firstResponseStarted.countDown();
+                releaseFirstResponse.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        server.createContext("/image.png", exchange -> {
+            imageRequestCount.incrementAndGet();
+            byte[] imageBytes = "image".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, imageBytes.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(imageBytes);
+            }
+        });
+        var executor = Executors.newCachedThreadPool();
+        server.setExecutor(executor);
+        server.start();
+
+        try {
+            var limitedProvider = new OllamaProvider(
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                "llama3.1",
+                null,
+                null,
+                20 * 1024 * 1024,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(10),
+                1,
+                true
+            );
+            var firstRequest = new ChatCompletionRequest(
+                "llama3.1",
+                List.of(new ChatCompletionRequest.Message("user", "Hello")),
+                true,
+                null,
+                null
+            );
+            var imageRequest = new ChatCompletionRequest(
+                "llama3.1",
+                List.of(new ChatCompletionRequest.Message(
+                    "user",
+                    List.of(
+                        ChatCompletionRequest.ContentPart.text("describe"),
+                        ChatCompletionRequest.ContentPart.imageUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/image.png")
+                    )
+                )),
+                true,
+                null,
+                null
+            );
+
+            var context = new RequestContext.Context(UUID.randomUUID(), null, firstRequest.model(), Instant.now());
+            ScopedValue.where(RequestContext.key(), context).run(() -> {
+                Stream<ProviderResponse> firstStream = limitedProvider.execute(firstRequest);
+                try {
+                    assertTrue(firstResponseStarted.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                    var secondResponses = limitedProvider.execute(imageRequest).toList();
+                    assertEquals(1, secondResponses.size());
+                    var error = assertInstanceOf(ProviderResponse.ErrorResponse.class, secondResponses.getFirst());
+                    assertEquals(503, error.code());
+                    assertEquals(0, imageRequestCount.get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail("Interrupted while waiting for provider response");
+                } finally {
+                    releaseFirstResponse.countDown();
+                    firstStream.close();
+                }
+            });
+            assertEquals(1, chatRequestCount.get());
+        } finally {
+            releaseFirstResponse.countDown();
+            server.stop(0);
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void testResolveImageToBase64_RejectsUnsupportedScheme() {
         InvocationTargetException ex = assertThrows(
             InvocationTargetException.class,
@@ -391,6 +507,59 @@ class OllamaProviderTest {
             });
         } finally {
             releaseFirstResponse.countDown();
+            server.stop(0);
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void capsChatHttpErrorBodyInReturnedError() throws Exception {
+        var largeError = "x".repeat(80 * 1024);
+        var server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/chat", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            var response = largeError.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(500, response.length);
+            try (var body = exchange.getResponseBody()) {
+                body.write(response);
+            }
+        });
+        var executor = Executors.newSingleThreadExecutor();
+        server.setExecutor(executor);
+        server.start();
+
+        try {
+            var provider = new OllamaProvider(
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                "llama3.1",
+                null,
+                null,
+                20 * 1024 * 1024,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(10),
+                1,
+                true
+            );
+            var request = new ChatCompletionRequest(
+                "llama3.1",
+                List.of(new ChatCompletionRequest.Message("user", "Hello")),
+                false,
+                null,
+                null
+            );
+            var context = new RequestContext.Context(UUID.randomUUID(), null, request.model(), Instant.now());
+
+            ScopedValue.where(RequestContext.key(), context).run(() -> {
+                try (var stream = provider.execute(request)) {
+                    var responses = stream.toList();
+                    assertEquals(1, responses.size());
+                    var error = assertInstanceOf(ProviderResponse.ErrorResponse.class, responses.getFirst());
+                    assertEquals(500, error.code());
+                    assertTrue(error.error().contains("truncated after 65536 bytes"));
+                    assertTrue(error.error().length() < largeError.length());
+                }
+            });
+        } finally {
             server.stop(0);
             executor.shutdownNow();
         }

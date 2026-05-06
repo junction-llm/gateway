@@ -109,6 +109,19 @@ class OllamaProviderEmbeddingsTest {
     }
 
     @Test
+    void capsHttpErrorBody() {
+        responseStatus.set(500);
+        responseBody.set("x".repeat(80 * 1024));
+        var request = new EmbeddingRequest("embeddinggemma", List.of("hello"), null, null, null);
+
+        var exception = assertThrows(ProviderException.class, () -> withContext(request, () -> provider.embed(request)));
+
+        assertEquals(500, exception.getCode());
+        assertTrue(exception.getMessage().contains("truncated after 65536 bytes"));
+        assertTrue(exception.getMessage().length() < responseBody.get().length());
+    }
+
+    @Test
     void recordsTelemetryForSuccessfulEmbeddingsRequest() {
         var telemetry = new RecordingTelemetry();
         provider = new OllamaProvider(baseUrl(), "embeddinggemma", telemetry);

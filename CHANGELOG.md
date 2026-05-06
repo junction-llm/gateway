@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.6 - 2026-05-06
+
+### Changed
+
+- Batched API-key usage persistence so background flushes aggregate request counts per key instead of issuing one persistence update per counted request.
+- Added provider health background refresh wiring and switched observability health snapshots to cached provider state by default.
+- Hardened Ollama multimodal/image processing with admission controls and bounded data URL handling before expensive provider-side work.
+- Reused ObjectMapper instances in streaming hot paths to reduce per-chunk allocation pressure.
+- Shut down the SSE idle-timeout scheduler on controller destruction and added SSE lifecycle/observability metrics.
+- Bounded the opt-in per-request diagnostic file appender with active-writer and queue limits.
+- Hardened trusted proxy and X-Forwarded-For handling so client IP based controls do not trust forwarded headers by default.
+- Avoided caching empty model refresh results, capped Ollama provider error-body reads, exposed IP limiter state bounds as configuration, and trimmed minor request-path allocation/logging overhead.
+
 ## 0.0.5 - 2026-05-05
 
 ### Changed

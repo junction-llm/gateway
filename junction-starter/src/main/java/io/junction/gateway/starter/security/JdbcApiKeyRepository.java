@@ -155,25 +155,48 @@ public final class JdbcApiKeyRepository implements ApiKeyRepository {
     @Override
     public ApiKey incrementUsage(String id) {
         try {
-            long now = Instant.now().toEpochMilli();
-            int updated = jdbcTemplate.update("""
-                UPDATE junction_api_keys
-                SET request_count = request_count + 1, last_used_at = ?
-                WHERE id = ?
-                """,
-                now,
-                id
-            );
-
-            if (updated == 0) {
-                throw new ApiKeyNotFoundException(id);
-            }
-
+            updateUsageCount(id, 1L, Instant.now().toEpochMilli());
             return findById(id).orElseThrow(() -> new ApiKeyNotFoundException(id));
         } catch (ApiKeyNotFoundException e) {
             throw e;
         } catch (DataAccessException e) {
             throw new ApiKeyStorageException("Failed to update API key usage in JDBC storage", e);
+        }
+    }
+
+    @Override
+    public void incrementUsageBatch(Map<String, Long> usageCounts) {
+        if (usageCounts == null || usageCounts.isEmpty()) {
+            return;
+        }
+        try {
+            long now = Instant.now().toEpochMilli();
+            for (Map.Entry<String, Long> entry : usageCounts.entrySet()) {
+                long count = entry.getValue() != null ? entry.getValue() : 0L;
+                if (count > 0L) {
+                    updateUsageCount(entry.getKey(), count, now);
+                }
+            }
+        } catch (ApiKeyNotFoundException e) {
+            throw e;
+        } catch (DataAccessException e) {
+            throw new ApiKeyStorageException("Failed to update API key usage batch in JDBC storage", e);
+        }
+    }
+
+    private void updateUsageCount(String id, long count, long now) {
+        int updated = jdbcTemplate.update("""
+            UPDATE junction_api_keys
+            SET request_count = request_count + ?, last_used_at = ?
+            WHERE id = ?
+            """,
+            count,
+            now,
+            id
+        );
+
+        if (updated == 0) {
+            throw new ApiKeyNotFoundException(id);
         }
     }
 

@@ -32,6 +32,27 @@ class ApiKeyStorageConfigurationTest {
         .withUserConfiguration(StorageTestConfiguration.class);
 
     @Test
+    void bindsIpRateLimiterMaxIpStatesProperty() {
+        contextRunner
+            .withPropertyValues(
+                "junction.security.ip-rate-limit.requests-per-minute=7",
+                "junction.security.ip-rate-limit.requests-per-hour=70",
+                "junction.security.ip-rate-limit.enabled=true",
+                "junction.security.ip-rate-limit.max-ip-states=42"
+            )
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                JunctionProperties.IpRateLimit config = context.getBean(JunctionProperties.class)
+                    .getSecurity()
+                    .getIpRateLimit();
+                assertThat(config.getRequestsPerMinute()).isEqualTo(7);
+                assertThat(config.getRequestsPerHour()).isEqualTo(70);
+                assertThat(config.isEnabled()).isTrue();
+                assertThat(config.getMaxIpStates()).isEqualTo(42);
+            });
+    }
+
+    @Test
     void usesInMemoryRepositoryByDefault() {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();

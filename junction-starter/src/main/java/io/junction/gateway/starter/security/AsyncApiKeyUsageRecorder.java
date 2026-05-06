@@ -9,6 +9,7 @@ import org.springframework.context.SmartLifecycle;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
@@ -149,14 +150,19 @@ public class AsyncApiKeyUsageRecorder implements ApiKeyUsageRecorder, SmartLifec
 
     void flushPending() {
         List<UsageCount> counts = drainPendingCounts();
+        if (counts.isEmpty()) {
+            return;
+        }
+
+        Map<String, Long> batch = new LinkedHashMap<>();
         for (UsageCount usage : counts) {
-            for (long i = 0; i < usage.count(); i++) {
-                try {
-                    repository.incrementUsage(usage.apiKeyId());
-                } catch (RuntimeException e) {
-                    logger.warn("Failed to record API-key usage for id {}", usage.apiKeyId(), e);
-                }
-            }
+            batch.merge(usage.apiKeyId(), usage.count(), Long::sum);
+        }
+
+        try {
+            repository.incrementUsageBatch(batch);
+        } catch (RuntimeException e) {
+            logger.warn("Failed to record API-key usage batch for {} key(s)", batch.size(), e);
         }
     }
 

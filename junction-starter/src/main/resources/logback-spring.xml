@@ -19,11 +19,15 @@
     <!--
         Per-request file logging creates one writer/file queue per trace and is expensive
         enough to be unsafe as a default. Enable the "per-request-logging" Spring
-        profile only for short, targeted diagnostics.
+        profile only for short, targeted diagnostics. The appender is bounded and
+        drops excess diagnostic events instead of performing request-thread disk writes.
     -->
     <springProfile name="per-request-logging">
         <appender name="PER_REQUEST" class="io.junction.gateway.starter.logging.PerRequestFileAppender">
-            <basePath>logs</basePath>
+            <basePath>${JUNCTION_PER_REQUEST_LOG_PATH:-logs}</basePath>
+            <maxActiveWriters>${JUNCTION_PER_REQUEST_LOG_MAX_WRITERS:-128}</maxActiveWriters>
+            <queueCapacity>${JUNCTION_PER_REQUEST_LOG_QUEUE_CAPACITY:-1000}</queueCapacity>
+            <flushIntervalMillis>${JUNCTION_PER_REQUEST_LOG_FLUSH_INTERVAL_MILLIS:-250}</flushIntervalMillis>
         </appender>
 
         <logger name="io.junction.gateway" level="DEBUG" additivity="false">
