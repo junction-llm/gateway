@@ -8,7 +8,7 @@ Junction is an OpenAI-compatible LLM gateway for the JVM. It exposes `/v1/chat/c
 
 `v0.0.5` is the current public release.
 
-What is ready in `v0.0.3`:
+What is ready in `v0.0.5`:
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-compatible `GET /v1/models`
 - OpenAI-compatible `POST /v1/embeddings`
