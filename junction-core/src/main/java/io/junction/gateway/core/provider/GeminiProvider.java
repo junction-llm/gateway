@@ -4,26 +4,41 @@ import io.junction.gateway.core.context.RequestContext;
 import io.junction.gateway.core.model.*;
 import io.junction.gateway.core.telemetry.GatewayTelemetry;
 import io.junction.gateway.core.tracing.GatewayTracing;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
 import tools.jackson.databind.ObjectMapper;
 
 public final class GeminiProvider implements LlmProvider {
+    private static final Logger log = LoggerFactory.getLogger(GeminiProvider.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 
     private final HttpClient client;
     private final String apiKey;
     private final String model;
     private final GatewayTelemetry telemetry;
     private final GatewayTracing tracing;
+    private final Duration connectTimeout;
+    private final Duration requestTimeout;
+    private final Semaphore requestBulkhead;
     
     public GeminiProvider(String apiKey, String model) {
         this(apiKey, model, GatewayTelemetry.noop(), GatewayTracing.noop());
@@ -34,17 +49,41 @@ public final class GeminiProvider implements LlmProvider {
     }
 
     public GeminiProvider(String apiKey, String model, GatewayTelemetry telemetry, GatewayTracing tracing) {
+        this(apiKey, model, telemetry, tracing, Duration.ofSeconds(10), Duration.ofMinutes(5), DEFAULT_MAX_CONCURRENT_REQUESTS);
+    }
+
+    public GeminiProvider(String apiKey, String model, GatewayTelemetry telemetry, GatewayTracing tracing,
+                          Duration connectTimeout, Duration requestTimeout) {
+        this(apiKey, model, telemetry, tracing, connectTimeout, requestTimeout, DEFAULT_MAX_CONCURRENT_REQUESTS);
+    }
+
+    public GeminiProvider(String apiKey, String model, GatewayTelemetry telemetry, GatewayTracing tracing,
+                          Duration connectTimeout, Duration requestTimeout, int maxConcurrentRequests) {
         this.apiKey = apiKey;
         this.model = model;
         this.telemetry = telemetry != null ? telemetry : GatewayTelemetry.noop();
         this.tracing = tracing != null ? tracing : GatewayTracing.noop();
+        this.connectTimeout = requirePositive(connectTimeout, "connectTimeout");
+        this.requestTimeout = requirePositive(requestTimeout, "requestTimeout");
+        if (maxConcurrentRequests <= 0) {
+            throw new IllegalArgumentException("maxConcurrentRequests must be positive");
+        }
+        this.requestBulkhead = new Semaphore(maxConcurrentRequests);
         this.client = HttpClient.newBuilder()
+            .connectTimeout(this.connectTimeout)
             .executor(Executors.newVirtualThreadPerTaskExecutor())
             .build();
     }
     
     @Override
     public String providerId() { return "gemini"; }
+
+    private static Duration requirePositive(Duration duration, String name) {
+        if (duration == null || duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        return duration;
+    }
     
     @Override
     public boolean isHealthy() {
@@ -79,26 +118,39 @@ public final class GeminiProvider implements LlmProvider {
             .uri(uri)
             .header("Content-Type", "application/json")
             .header("X-Trace-ID", traceId.toString())
+            .timeout(requestTimeout)
             .POST(HttpRequest.BodyPublishers.ofString(geminiBody));
         traceScope.propagationHeaders().forEach(httpReqBuilder::header);
         var httpReq = httpReqBuilder.build();
             
+        if (!requestBulkhead.tryAcquire()) {
+            traceScope.tag("junction.outcome", "overloaded");
+            telemetry.recordProviderRequest(providerId(), "chat", "overloaded", System.nanoTime() - startNanos);
+            traceScope.close();
+            return Stream.of(new ProviderResponse.ErrorResponse("Gemini provider concurrency limit exceeded", 503));
+        }
+
         try {
             var response = client.send(httpReq, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() != 200) {
+                try (var ignored = response.body()) {
+                    // Close provider response body before returning a synthetic error stream.
+                }
                 traceScope.tag("junction.outcome", "http_error");
                 traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
                 traceScope.error(new IllegalStateException("Gemini error: HTTP " + response.statusCode()));
                 telemetry.recordProviderRequest(providerId(), "chat", "http_error", System.nanoTime() - startNanos);
                 traceScope.close();
+                requestBulkhead.release();
                 return Stream.of(new ProviderResponse.ErrorResponse("Gemini error: HTTP " + response.statusCode(), response.statusCode()));
             }
-            return instrumentStream(parseGeminiStream(response.body()), "chat", startNanos, traceScope);
+            return releaseOnClose(instrumentStream(parseGeminiStream(response.body()), "chat", startNanos, traceScope));
         } catch (Exception e) {
             traceScope.tag("junction.outcome", "unexpected_error");
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "unexpected_error", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), 500));
         }
     }
@@ -114,12 +166,12 @@ public final class GeminiProvider implements LlmProvider {
         }
     }
     
-    private Stream<ProviderResponse> parseGeminiStream(java.io.InputStream is) {
-        return new java.io.BufferedReader(new java.io.InputStreamReader(is))
-            .lines()
+    private Stream<ProviderResponse> parseGeminiStream(InputStream is) {
+        var reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+        var stream = reader.lines()
             .filter(line -> line.startsWith("data: "))
             .map(line -> line.substring(6))
-            .map(json -> {
+            .<ProviderResponse>map(json -> {
                 try {
                     if (json.isBlank() || "[DONE]".equals(json)) {
                         return new ProviderResponse.GeminiResponse("", 0, 0, true);
@@ -146,6 +198,14 @@ public final class GeminiProvider implements LlmProvider {
                     return new ProviderResponse.ErrorResponse("Parse error", 500);
                 }
             });
+
+        return stream.onClose(() -> {
+            try {
+                reader.close();
+            } catch (IOException e) {
+                log.debug("Error closing Gemini stream", e);
+            }
+        });
     }
     
     private String transformToGemini(ChatCompletionRequest request) {
@@ -206,6 +266,15 @@ public final class GeminiProvider implements LlmProvider {
     @Override
     public Gatherer<ProviderResponse, ?, ChatCompletionChunk> responseAdapter() {
         return new io.junction.gateway.core.gatherer.OpenAIAdapterGatherer(model);
+    }
+
+    private Stream<ProviderResponse> releaseOnClose(Stream<ProviderResponse> stream) {
+        var released = new AtomicBoolean(false);
+        return stream.onClose(() -> {
+            if (released.compareAndSet(false, true)) {
+                requestBulkhead.release();
+            }
+        });
     }
 
     private Stream<ProviderResponse> instrumentStream(Stream<ProviderResponse> stream,

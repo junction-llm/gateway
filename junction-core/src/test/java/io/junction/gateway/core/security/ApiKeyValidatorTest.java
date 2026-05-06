@@ -3,6 +3,9 @@ package io.junction.gateway.core.security;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -80,6 +83,50 @@ class ApiKeyValidatorTest {
         assertEquals(429, result.httpStatus());
     }
 
+
+    @Test
+    void recordsUsageOnlyAfterSuccessfulValidation() {
+        ApiKeyValidator.GeneratedKey generated = validator.generateKey("Recorder Test", ApiKey.Tier.FREE);
+        RecordingUsageRecorder recorder = new RecordingUsageRecorder();
+        ApiKeyValidator recordingValidator = new ApiKeyValidator(repository, rateLimiter, recorder, true);
+
+        ApiKeyValidator.ValidationResult result = recordingValidator.validate(generated.rawKey(), "127.0.0.1", null);
+
+        assertTrue(result.valid());
+        assertEquals(1, recorder.recordedCount());
+        assertEquals(generated.id(), recorder.lastRecordedId());
+    }
+
+    @Test
+    void doesNotRecordUsageForRejectedValidation() {
+        ApiKeyValidator.GeneratedKey generated = validator.generateKey("Rejected Recorder Test", ApiKey.Tier.FREE);
+        repository.save(new ApiKey.Builder(generated.apiKey())
+            .allowedModels(Set.of("allowed-model"))
+            .build());
+        RecordingUsageRecorder recorder = new RecordingUsageRecorder();
+        ApiKeyValidator recordingValidator = new ApiKeyValidator(repository, rateLimiter, recorder, true);
+
+        recordingValidator.validate(null, "127.0.0.1", null);
+        recordingValidator.validate("invalid_key", "127.0.0.1", null);
+        recordingValidator.validate("junc_abcdefghijklmnopqrstuvwxyz123456789", "127.0.0.1", null);
+        recordingValidator.validate(generated.rawKey(), "203.0.113.1", "forbidden-model");
+
+        assertEquals(0, recorder.recordedCount());
+    }
+
+    @Test
+    void usageRecorderFailureDoesNotRejectRequest() {
+        ApiKeyValidator.GeneratedKey generated = validator.generateKey("Failing Recorder Test", ApiKey.Tier.FREE);
+        ApiKeyUsageRecorder failingRecorder = apiKeyId -> {
+            throw new IllegalStateException("recorder unavailable");
+        };
+        ApiKeyValidator recordingValidator = new ApiKeyValidator(repository, rateLimiter, failingRecorder, true);
+
+        ApiKeyValidator.ValidationResult result = recordingValidator.validate(generated.rawKey(), "127.0.0.1", null);
+
+        assertTrue(result.valid());
+    }
+
     @Test
     void testGenerateKey() {
         ApiKeyValidator.GeneratedKey generated = validator.generateKey("My App", ApiKey.Tier.PRO);
@@ -142,5 +189,25 @@ class ApiKeyValidatorTest {
         
         assertTrue(result.valid());
         assertEquals(ApiKey.Tier.ENTERPRISE, result.tier());
+    }
+
+
+    private static class RecordingUsageRecorder implements ApiKeyUsageRecorder {
+        private final AtomicInteger recordedCount = new AtomicInteger();
+        private String lastRecordedId;
+
+        @Override
+        public void recordUsage(String apiKeyId) {
+            recordedCount.incrementAndGet();
+            lastRecordedId = apiKeyId;
+        }
+
+        int recordedCount() {
+            return recordedCount.get();
+        }
+
+        String lastRecordedId() {
+            return lastRecordedId;
+        }
     }
 }

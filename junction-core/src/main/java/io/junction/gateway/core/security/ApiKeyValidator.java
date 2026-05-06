@@ -29,11 +29,20 @@ public class ApiKeyValidator {
     
     private final ApiKeyRepository repository;
     private final RateLimiter rateLimiter;
+    private final ApiKeyUsageRecorder usageRecorder;
     private final boolean requireApiKey;
-    
+
     public ApiKeyValidator(ApiKeyRepository repository, RateLimiter rateLimiter, boolean requireApiKey) {
+        this(repository, rateLimiter, new SyncApiKeyUsageRecorder(repository), requireApiKey);
+    }
+
+    public ApiKeyValidator(ApiKeyRepository repository,
+                           RateLimiter rateLimiter,
+                           ApiKeyUsageRecorder usageRecorder,
+                           boolean requireApiKey) {
         this.repository = Objects.requireNonNull(repository, "repository cannot be null");
         this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter cannot be null");
+        this.usageRecorder = Objects.requireNonNull(usageRecorder, "usageRecorder cannot be null");
         this.requireApiKey = requireApiKey;
     }
     
@@ -145,10 +154,15 @@ public class ApiKeyValidator {
                 rateResult
             );
         }
-        
-        // Update usage stats
-        repository.incrementUsage(apiKey.id());
-        
+        // Record usage after authentication, authorization, and rate limiting succeed.
+        // Usage recording is best-effort and must not reject an otherwise valid request.
+        try {
+            usageRecorder.recordUsage(apiKey.id());
+        } catch (RuntimeException ignored) {
+            // Recorder implementations may be asynchronous or backed by external storage.
+            // Validation should remain a pure allow/deny decision even if metrics fail.
+        }
+
         return ValidationResult.success(apiKey, apiKey.tier(), rateResult);
     }
     
@@ -170,24 +184,24 @@ public class ApiKeyValidator {
             );
         }
         
-        String keyPart = rawKey.substring(KEY_PREFIX.length());
+        int keyPartLength = rawKey.length() - KEY_PREFIX.length();
         
-        if (keyPart.length() < KEY_MIN_LENGTH) {
+        if (keyPartLength < KEY_MIN_LENGTH) {
             return ValidationResult.failure(
                 ValidationError.INVALID_FORMAT,
                 "API key is too short. Minimum length: " + (KEY_PREFIX.length() + KEY_MIN_LENGTH)
             );
         }
         
-        if (keyPart.length() > KEY_MAX_LENGTH) {
+        if (keyPartLength > KEY_MAX_LENGTH) {
             return ValidationResult.failure(
                 ValidationError.INVALID_FORMAT,
                 "API key is too long. Maximum length: " + (KEY_PREFIX.length() + KEY_MAX_LENGTH)
             );
         }
         
-        // Check for valid characters (alphanumeric and underscores)
-        if (!keyPart.matches("^[a-zA-Z0-9_]+$")) {
+        // Check for valid characters without allocating a substring or compiling a regex on the hot path.
+        if (!hasValidKeyCharacters(rawKey, KEY_PREFIX.length())) {
             return ValidationResult.failure(
                 ValidationError.INVALID_FORMAT,
                 "API key contains invalid characters. Only alphanumeric and underscores allowed."
@@ -197,6 +211,19 @@ public class ApiKeyValidator {
         return ValidationResult.formatValid();
     }
     
+    private boolean hasValidKeyCharacters(String rawKey, int startIndex) {
+        for (int i = startIndex; i < rawKey.length(); i++) {
+            char c = rawKey.charAt(i);
+            if (!((c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '_')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Extracts the prefix from a raw API key (first 8 chars after prefix).
      */

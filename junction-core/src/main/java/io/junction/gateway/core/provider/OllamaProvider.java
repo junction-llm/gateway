@@ -8,6 +8,13 @@ import io.junction.gateway.core.tracing.GatewayTracing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -19,6 +26,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
@@ -30,11 +39,19 @@ public final class OllamaProvider implements LlmProvider {
     private static final Logger payloadLog = LoggerFactory.getLogger("io.junction.gateway.payload.ollama");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int CONSOLE_MESSAGE_PREVIEW_LIMIT = 300;
+    private static final int DEFAULT_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
+    private static final int REMOTE_IMAGE_READ_BUFFER_BYTES = 8192;
+    private static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
     private final HttpClient client;
     private final String baseUrl;
     private final String defaultModel;
     private final GatewayTelemetry telemetry;
     private final GatewayTracing tracing;
+    private final int maxRemoteImageBytes;
+    private final Duration connectTimeout;
+    private final Duration requestTimeout;
+    private final Semaphore requestBulkhead;
+    private final boolean allowPrivateRemoteImageUrls;
     
     public OllamaProvider(String baseUrl, String defaultModel) {
         this(baseUrl, defaultModel, GatewayTelemetry.noop(), GatewayTracing.noop());
@@ -45,13 +62,44 @@ public final class OllamaProvider implements LlmProvider {
     }
 
     public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing) {
+        this(baseUrl, defaultModel, telemetry, tracing, DEFAULT_MAX_REMOTE_IMAGE_BYTES);
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing, int maxRemoteImageBytes) {
+        this(baseUrl, defaultModel, telemetry, tracing, maxRemoteImageBytes, Duration.ofSeconds(10), Duration.ofMinutes(5), DEFAULT_MAX_CONCURRENT_REQUESTS);
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing,
+                          int maxRemoteImageBytes, Duration connectTimeout, Duration requestTimeout) {
+        this(baseUrl, defaultModel, telemetry, tracing, maxRemoteImageBytes, connectTimeout, requestTimeout, DEFAULT_MAX_CONCURRENT_REQUESTS);
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing,
+                          int maxRemoteImageBytes, Duration connectTimeout, Duration requestTimeout, int maxConcurrentRequests) {
+        this(baseUrl, defaultModel, telemetry, tracing, maxRemoteImageBytes, connectTimeout, requestTimeout, maxConcurrentRequests, false);
+    }
+
+    public OllamaProvider(String baseUrl, String defaultModel, GatewayTelemetry telemetry, GatewayTracing tracing,
+                          int maxRemoteImageBytes, Duration connectTimeout, Duration requestTimeout, int maxConcurrentRequests,
+                          boolean allowPrivateRemoteImageUrls) {
         this.baseUrl = baseUrl;
         this.defaultModel = defaultModel;
         this.telemetry = telemetry != null ? telemetry : GatewayTelemetry.noop();
         this.tracing = tracing != null ? tracing : GatewayTracing.noop();
+        if (maxRemoteImageBytes <= 0) {
+            throw new IllegalArgumentException("maxRemoteImageBytes must be positive");
+        }
+        this.maxRemoteImageBytes = maxRemoteImageBytes;
+        this.connectTimeout = requirePositive(connectTimeout, "connectTimeout");
+        this.requestTimeout = requirePositive(requestTimeout, "requestTimeout");
+        if (maxConcurrentRequests <= 0) {
+            throw new IllegalArgumentException("maxConcurrentRequests must be positive");
+        }
+        this.requestBulkhead = new Semaphore(maxConcurrentRequests);
+        this.allowPrivateRemoteImageUrls = allowPrivateRemoteImageUrls;
 
         this.client = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(this.connectTimeout)
             .executor(Executors.newVirtualThreadPerTaskExecutor())
             .build();
     }
@@ -141,9 +189,17 @@ public final class OllamaProvider implements LlmProvider {
             .uri(URI.create(baseUrl + "/api/chat"))
             .header("Content-Type", "application/json")
             .header("X-Trace-ID", traceId.toString())
+            .timeout(requestTimeout)
             .POST(HttpRequest.BodyPublishers.ofString(json));
         traceScope.propagationHeaders().forEach(httpReqBuilder::header);
         var httpReq = httpReqBuilder.build();
+
+        if (!requestBulkhead.tryAcquire()) {
+            traceScope.tag("junction.outcome", "overloaded");
+            telemetry.recordProviderRequest(providerId(), "chat", "overloaded", System.nanoTime() - startNanos);
+            traceScope.close();
+            return Stream.of(new ProviderResponse.ErrorResponse("Ollama provider concurrency limit exceeded", 503));
+        }
 
         try {
             log.debug("[{}] Sending request to Ollama at: {}", traceId, baseUrl);
@@ -151,7 +207,10 @@ public final class OllamaProvider implements LlmProvider {
             
             if (response.statusCode() != 200) {
                 log.error("[{}] Ollama returned HTTP error: {}", traceId, response.statusCode());
-                var errorBody = new String(response.body().readAllBytes());
+                String errorBody;
+                try (var body = response.body()) {
+                    errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+                }
                 log.error("[{}] Error response body: {}", traceId, errorBody);
                 traceScope.tag("junction.outcome", "http_error");
                 traceScope.tag("http.status_code", Integer.toString(response.statusCode()));
@@ -161,13 +220,14 @@ public final class OllamaProvider implements LlmProvider {
                 ));
                 telemetry.recordProviderRequest(providerId(), "chat", "http_error", System.nanoTime() - startNanos);
                 traceScope.close();
+                requestBulkhead.release();
                 return Stream.of(new ProviderResponse.ErrorResponse(
                     "Ollama error: HTTP " + response.statusCode() + " - " + errorBody, 
                     response.statusCode()));
             }
             
             log.debug("[{}] Received successful response from Ollama, parsing NDJSON stream", traceId);
-            return instrumentStream(parseNdJson(response.body(), traceId), "chat", startNanos, traceScope);
+            return releaseOnClose(instrumentStream(parseNdJson(response.body(), traceId), "chat", startNanos, traceScope));
             
         } catch (java.net.http.HttpTimeoutException e) {
             log.error("[{}] Timeout calling Ollama: {}", traceId, e.getMessage());
@@ -175,6 +235,7 @@ public final class OllamaProvider implements LlmProvider {
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "timeout", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama timeout: " + e.getMessage(), 504));
         } catch (java.io.IOException e) {
             log.error("[{}] IO error calling Ollama: {}", traceId, e.getMessage());
@@ -182,6 +243,7 @@ public final class OllamaProvider implements LlmProvider {
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "io_error", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama connection error: " + e.getMessage(), 502));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -190,6 +252,7 @@ public final class OllamaProvider implements LlmProvider {
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "interrupted", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse("Request interrupted", 500));
         } catch (ProviderException e) {
             log.error("[{}] Invalid Ollama request: {}", traceId, e.getMessage());
@@ -197,6 +260,7 @@ public final class OllamaProvider implements LlmProvider {
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "provider_error", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse(e.getMessage(), e.getCode()));
         } catch (Exception e) {
             log.error("[{}] Unexpected error calling Ollama: {}", traceId, e.getMessage(), e);
@@ -204,6 +268,7 @@ public final class OllamaProvider implements LlmProvider {
             traceScope.error(e);
             telemetry.recordProviderRequest(providerId(), "chat", "unexpected_error", System.nanoTime() - startNanos);
             traceScope.close();
+            requestBulkhead.release();
             return Stream.of(new ProviderResponse.ErrorResponse("Ollama error: " + e.getMessage(), 500));
         }
     }
@@ -231,9 +296,16 @@ public final class OllamaProvider implements LlmProvider {
                 .uri(URI.create(baseUrl + "/api/embed"))
                 .header("Content-Type", "application/json")
                 .header("X-Trace-ID", traceId.toString())
+                .timeout(requestTimeout)
                 .POST(HttpRequest.BodyPublishers.ofString(serializeEmbeddingRequest(request)));
             traceScope.propagationHeaders().forEach(httpReqBuilder::header);
             var httpReq = httpReqBuilder.build();
+
+            if (!requestBulkhead.tryAcquire()) {
+                traceScope.tag("junction.outcome", "overloaded");
+                telemetry.recordProviderRequest(providerId(), "embeddings", "overloaded", System.nanoTime() - startNanos);
+                throw new ProviderException("Ollama provider concurrency limit exceeded", 503);
+            }
 
             try {
                 log.info("[{}] OllamaProvider embedding request: model={}, inputs={}",
@@ -279,6 +351,8 @@ public final class OllamaProvider implements LlmProvider {
                 traceScope.error(e);
                 telemetry.recordProviderRequest(providerId(), "embeddings", "provider_error", System.nanoTime() - startNanos);
                 throw e;
+            } finally {
+                requestBulkhead.release();
             }
         }
     }
@@ -312,6 +386,15 @@ public final class OllamaProvider implements LlmProvider {
                 );
                 traceScope.close();
             });
+    }
+
+    private Stream<ProviderResponse> releaseOnClose(Stream<ProviderResponse> stream) {
+        var released = new AtomicBoolean(false);
+        return stream.onClose(() -> {
+            if (released.compareAndSet(false, true)) {
+                requestBulkhead.release();
+            }
+        });
     }
 
     private String buildDebugMessages(List<ChatCompletionRequest.Message> messages, boolean truncate) {
@@ -351,10 +434,11 @@ public final class OllamaProvider implements LlmProvider {
         return oneLine.substring(0, maxLength) + "...";
     }
 
-    private Stream<ProviderResponse> parseNdJson(java.io.InputStream is, java.util.UUID traceId) {
+    private Stream<ProviderResponse> parseNdJson(InputStream is, java.util.UUID traceId) {
         final java.util.concurrent.atomic.AtomicInteger chunkCounter = new java.util.concurrent.atomic.AtomicInteger(0);
         
-        var stream = new java.io.BufferedReader(new java.io.InputStreamReader(is))
+        var reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+        var stream = reader
             .lines()
             .map(line -> {
                 try {
@@ -441,7 +525,14 @@ public final class OllamaProvider implements LlmProvider {
                 }
             });
         
-        return stream.onClose(() -> log.info("[{}] NDJSON stream closed", traceId));
+        return stream.onClose(() -> {
+            try {
+                reader.close();
+            } catch (IOException e) {
+                log.debug("[{}] Error closing Ollama NDJSON stream", traceId, e);
+            }
+            log.info("[{}] NDJSON stream closed", traceId);
+        });
     }
     
     @Override
@@ -463,9 +554,7 @@ public final class OllamaProvider implements LlmProvider {
                 log.warn("Failed to fetch models from Ollama: HTTP {}", resp.statusCode());
                 return List.of();
             }
-            
-            var objectMapper = new ObjectMapper();
-            var rootNode = objectMapper.readTree(resp.body());
+            var rootNode = OBJECT_MAPPER.readTree(resp.body());
             var modelsNode = rootNode.path("models");
             
             if (!modelsNode.isArray()) {
@@ -517,7 +606,7 @@ public final class OllamaProvider implements LlmProvider {
             : request.input();
 
         try {
-            return new ObjectMapper().writeValueAsString(Map.of(
+            return OBJECT_MAPPER.writeValueAsString(Map.of(
                 "model", request.model(),
                 "input", inputPayload
             ));
@@ -531,7 +620,7 @@ public final class OllamaProvider implements LlmProvider {
                                                      String encodingFormat,
                                                      java.util.UUID traceId) {
         try {
-            JsonNode rootNode = new ObjectMapper().readTree(body);
+            JsonNode rootNode = OBJECT_MAPPER.readTree(body);
             JsonNode embeddingsNode = rootNode.path("embeddings");
             if (!embeddingsNode.isArray()) {
                 throw new ProviderException("Ollama embeddings response missing 'embeddings' array.", 502);
@@ -624,25 +713,37 @@ public final class OllamaProvider implements LlmProvider {
         }
     }
     
+    private static Duration requirePositive(Duration duration, String name) {
+        if (duration == null || duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        return duration;
+    }
+
     private String loadImageFromUrl(String imageUrl) {
         try {
+            var imageUri = URI.create(imageUrl);
+            validateRemoteImageUri(imageUri);
             var request = HttpRequest.newBuilder()
-                .uri(URI.create(imageUrl))
+                .uri(imageUri)
                 .timeout(Duration.ofSeconds(8))
                 .GET()
                 .build();
-            
-            var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() != 200) {
-                throw new ProviderException("Failed to load image from URL: HTTP " + response.statusCode(), 400);
-            }
 
-            var imageBytes = response.body();
-            if (imageBytes == null || imageBytes.length == 0) {
-                throw new ProviderException("Image URL returned no content.", 400);
+            var response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            try (var body = response.body()) {
+                if (response.statusCode() != 200) {
+                    throw new ProviderException("Failed to load image from URL: HTTP " + response.statusCode(), 400);
+                }
+
+                validateRemoteImageHeaders(response);
+                var imageBytes = readRemoteImageBody(body);
+                if (imageBytes.length == 0) {
+                    throw new ProviderException("Image URL returned no content.", 400);
+                }
+
+                return Base64.getEncoder().encodeToString(imageBytes);
             }
-            
-            return Base64.getEncoder().encodeToString(imageBytes);
         } catch (ProviderException e) {
             throw e;
         } catch (InterruptedException e) {
@@ -651,6 +752,86 @@ public final class OllamaProvider implements LlmProvider {
         } catch (Exception e) {
             throw new ProviderException("Failed to load image from URL: " + e.getMessage(), 400);
         }
+    }
+
+    private void validateRemoteImageUri(URI imageUri) throws IOException {
+        var scheme = imageUri.getScheme();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            throw new ProviderException("Remote image URL must use http or https.", 400);
+        }
+
+        var host = imageUri.getHost();
+        if (host == null || host.isBlank()) {
+            throw new ProviderException("Remote image URL must include a host.", 400);
+        }
+
+        if (allowPrivateRemoteImageUrls) {
+            return;
+        }
+
+        for (var address : InetAddress.getAllByName(host)) {
+            if (isBlockedRemoteImageAddress(address)) {
+                throw new ProviderException("Remote image URL host resolves to a private or local network address.", 400);
+            }
+        }
+    }
+
+    private boolean isBlockedRemoteImageAddress(InetAddress address) {
+        if (address.isAnyLocalAddress()
+            || address.isLoopbackAddress()
+            || address.isLinkLocalAddress()
+            || address.isSiteLocalAddress()
+            || address.isMulticastAddress()) {
+            return true;
+        }
+
+        var bytes = address.getAddress();
+        if (bytes.length == 4) {
+            var first = bytes[0] & 0xff;
+            var second = bytes[1] & 0xff;
+            return (first == 100 && second >= 64 && second <= 127)
+                || (first == 169 && second == 254)
+                || (first == 192 && second == 0)
+                || (first == 198 && (second == 18 || second == 19));
+        }
+
+        if (bytes.length == 16) {
+            var first = bytes[0] & 0xff;
+            var second = bytes[1] & 0xff;
+            return (first & 0xfe) == 0xfc
+                || (first == 0x20 && second == 0x01 && (bytes[2] & 0xff) == 0x0d && (bytes[3] & 0xff) == 0xb8);
+        }
+
+        return false;
+    }
+
+    private void validateRemoteImageHeaders(HttpResponse<?> response) {
+        var contentType = response.headers().firstValue("Content-Type")
+            .map(value -> value.split(";", 2)[0].trim().toLowerCase())
+            .orElse("");
+        if (!contentType.startsWith("image/")) {
+            throw new ProviderException("Remote image URL must return an image/* content type.", 400);
+        }
+
+        var contentLength = response.headers().firstValueAsLong("Content-Length");
+        if (contentLength.isPresent() && contentLength.getAsLong() > maxRemoteImageBytes) {
+            throw new ProviderException("Remote image exceeds maximum size of " + maxRemoteImageBytes + " bytes.", 400);
+        }
+    }
+
+    private byte[] readRemoteImageBody(InputStream body) throws IOException {
+        var output = new ByteArrayOutputStream(Math.min(maxRemoteImageBytes, REMOTE_IMAGE_READ_BUFFER_BYTES));
+        var buffer = new byte[REMOTE_IMAGE_READ_BUFFER_BYTES];
+        int totalBytes = 0;
+        int read;
+        while ((read = body.read(buffer)) != -1) {
+            totalBytes += read;
+            if (totalBytes > maxRemoteImageBytes) {
+                throw new ProviderException("Remote image exceeds maximum size of " + maxRemoteImageBytes + " bytes.", 400);
+            }
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
     
 }

@@ -78,6 +78,7 @@ class GatewayPersistentApiKeyStorageIntegrationTest {
         properties.add("junction.providers.gemini.enabled=false");
         properties.add("junction.security.api-key.required=true");
         properties.add("junction.security.api-key.storage=" + storage);
+        properties.add("junction.security.api-key.usage-recorder=sync");
         properties.add("JUNCTION_API_KEY_1=" + VALID_API_KEY);
         properties.add("junction.security.ip-rate-limit.enabled=false");
         properties.add("junction.observability.security.enabled=false");

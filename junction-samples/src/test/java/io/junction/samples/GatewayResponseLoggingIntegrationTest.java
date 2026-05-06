@@ -206,6 +206,7 @@ abstract class AbstractGatewayResponseLoggingIntegrationTest {
         "junction.providers.gemini.enabled=false",
         "junction.security.api-key.required=false",
         "junction.security.ip-rate-limit.enabled=false",
+        "spring.profiles.active=per-request-logging",
         "junction.logging.chat-response.enabled=true"
     }
 )
@@ -278,6 +279,7 @@ class GatewayResponseLoggingEnabledIntegrationTest extends AbstractGatewayRespon
         "junction.providers.gemini.enabled=false",
         "junction.security.api-key.required=false",
         "junction.security.ip-rate-limit.enabled=false",
+        "spring.profiles.active=per-request-logging",
         "junction.logging.chat-response.enabled=false"
     }
 )
@@ -300,8 +302,8 @@ class GatewayResponseLoggingDisabledIntegrationTest extends AbstractGatewayRespo
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.choices[0].message.content").value(uniqueResponse));
 
-        String logContent = awaitNewLogFileContaining(before, "=== INCOMING REQUEST [JSON] ===");
-        assertThat(logContent).contains("=== INCOMING REQUEST [JSON] ===");
+        String logContent = awaitNewLogFileContaining(before, "incoming_request endpoint=JSON");
+        assertThat(logContent).contains("incoming_request endpoint=JSON");
         assertThat(logContent).doesNotContain("Chat response body:");
         assertThat(logContent).doesNotContain(uniqueResponse);
     }

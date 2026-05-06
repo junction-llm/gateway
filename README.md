@@ -6,7 +6,7 @@ Junction is an OpenAI-compatible LLM gateway for the JVM. It exposes `/v1/chat/c
 
 ## Status
 
-`v0.0.4` is the current public release.
+`v0.0.5` is the current public release.
 
 What is ready in `v0.0.3`:
 - OpenAI-compatible `POST /v1/chat/completions`
@@ -30,7 +30,7 @@ What is ready in `v0.0.3`:
 - Distributed tracing export through OTLP plus protected `/actuator/prometheus` support
 - Stable gateway correlation via `X-Trace-ID`, with distributed trace/span IDs exposed separately in logs as `otelTraceId` and `otelSpanId`
 
-What is not in `v0.0.4`:
+What is not in `v0.0.5`:
 - Advanced routing strategies beyond round-robin
 - `dimensions` support for `/v1/embeddings`
 - Full OpenAI API surface outside chat, models, and embeddings
@@ -49,7 +49,7 @@ What is not in `v0.0.4`:
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Ollama | Supported | Best-tested path for `0.0.4`|
+| Ollama | Supported | Best-tested path for `0.0.5`|
 | Gemini | Supported | Optional, requires `GEMINI_API_KEY` |
 
 ## Quick Start
@@ -192,12 +192,23 @@ The sample configuration lives in `junction-samples/src/main/resources/applicati
 
 Important settings:
 - `junction.providers.ollama.enabled`: enable Ollama
+- `junction.providers.ollama.max-remote-image-bytes`: maximum bytes accepted when fetching remote image URLs for Ollama vision requests; defaults to `20971520` (20 MiB)
+- `junction.providers.ollama.allow-private-remote-image-urls`: allow Ollama remote image URLs that resolve to private, loopback, link-local, multicast, metadata, or other non-public network ranges; defaults to `false`
+- `junction.providers.ollama.connect-timeout-millis`: provider connection timeout; defaults to `10000`
+- `junction.providers.ollama.request-timeout-millis`: provider request/stream wait timeout; defaults to `300000`
+- `junction.providers.ollama.max-concurrent-requests`: maximum concurrent Ollama provider requests; defaults to `100`
 - `junction.providers.gemini.enabled`: enable Gemini
+- `junction.providers.gemini.connect-timeout-millis`: provider connection timeout; defaults to `10000`
+- `junction.providers.gemini.request-timeout-millis`: provider request/stream wait timeout; defaults to `300000`
+- `junction.providers.gemini.max-concurrent-requests`: maximum concurrent Gemini provider requests; defaults to `100`
 - `junction.security.api-key.required`: require API keys
 - `junction.security.api-key.preconfigured`: startup seed keys; additive across all storage backends
 - `junction.security.api-key.storage`: storage type (`memory`, `file`, `h2`, `postgresql`)
 - `junction.security.ip-rate-limit.*`: per-IP throttling
 - `junction.security.ip-whitelist.*`: optional IP allowlisting with CIDR support
+- `junction.streaming.sse-timeout-millis`: SSE stream timeout; defaults to `300000` (5 minutes), use `0` to disable
+- `junction.streaming.max-active-streams`: maximum concurrently active SSE streams; defaults to `1000`, use `0` to disable
+- `junction.streaming.stream-idle-timeout-millis`: maximum idle time between provider stream chunks; defaults to `60000` (1 minute), use `0` to disable
 - `junction.client-adapters.*`: client compatibility adapter settings
 - `junction.logging.chat-response.enabled`: optional chat response-body logging to per-request files
 - `junction.observability.security.*`: built-in Actuator authentication and public health behavior
@@ -226,6 +237,8 @@ junction:
       h2-url: jdbc:h2:file:${JUNCTION_H2_PATH:./data/junction};DB_CLOSE_DELAY=-1
       h2-username: sa
       h2-password: ""
+      jdbc-pool-maximum-pool-size: 10
+      jdbc-pool-minimum-idle: 0
 ```
 
 Example PostgreSQL-backed storage:
@@ -238,12 +251,15 @@ junction:
       postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
       postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
       postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:}
+      jdbc-pool-maximum-pool-size: 10
+      jdbc-pool-minimum-idle: 0
 ```
 
 Notes:
 - `memory` remains the default backend.
 - `preconfigured` keys are additive seed data for all backends; missing keys are inserted on startup and existing stored keys are left in place.
 - The file backend rewrites the YAML store on key mutations and usage updates, so it is best suited to single-node, lower-throughput deployments.
+- H2 and PostgreSQL API-key storage use a dedicated HikariCP pool by default. Tune `jdbc-pool-maximum-pool-size`, `jdbc-pool-minimum-idle`, `jdbc-pool-connection-timeout-millis`, `jdbc-pool-idle-timeout-millis`, and `jdbc-pool-max-lifetime-millis` for production load and database limits.
 - PostgreSQL storage requires the PostgreSQL JDBC driver on the application classpath.
 - Rate-limit windows remain in-memory in this iteration; persistent storage covers API keys and per-key usage stats.
 
@@ -327,7 +343,7 @@ If you override the default Logback configuration, keep the dedicated `io.juncti
 ## Production Notes
 
 - The sample application is a demo and reference app, not a managed production distribution.
-- The public `0.0.4` release stores API keys `in-memory`, `file`, `h2`, and `postgresql`.
+- The public `0.0.5` release stores API keys `in-memory`, `file`, `h2`, and `postgresql`.
 - The deployment files in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`Caddyfile`](Caddyfile), and [`docker-compose.caddy.yml`](docker-compose.caddy.yml) are example assets and should be customized before public deployment.
 - Per-request logs are written under `logs/` relative to the app working directory. The dated folder name follows the JVM/system default timezone, and each log line timestamp remains UTC. For the sample app, that is typically `junction-samples/logs/`.
 
@@ -340,7 +356,7 @@ If you override the default Logback configuration, keep the dedicated `io.juncti
 
 ## Compatibility Matrix
 
-| Area | `0.0.4` |
+| Area | `0.0.5` |
 |------|---------|
 | Java runtime | Java 25 |
 | Build tool | Maven reactor |

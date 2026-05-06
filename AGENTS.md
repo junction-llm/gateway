@@ -667,6 +667,6 @@ When extending this project, consider:
 
 ---
 
-**Last Updated**: 2026-03-21
-**Project Version**: 0.0.4
+**Last Updated**: 2026-05-05
+**Project Version**: 0.0.5
 **Java Version**: 25

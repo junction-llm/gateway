@@ -14,6 +14,13 @@ public sealed interface LlmProvider permits
     
     Gatherer<ProviderResponse, ?, ChatCompletionChunk> responseAdapter();
     
+    /**
+     * Execute a chat completion request.
+     *
+     * <p>The returned stream may own provider network resources. Callers must close
+     * it, preferably with try-with-resources. Closing the stream should close or
+     * cancel the underlying provider response body where applicable.
+     */
     Stream<ProviderResponse> execute(ChatCompletionRequest request);
 
     default boolean supportsImageInputs() {
@@ -23,10 +30,9 @@ public sealed interface LlmProvider permits
     EmbeddingResponse embed(EmbeddingRequest request);
     
     default ChatCompletionChunk complete(ChatCompletionRequest request) {
-        return execute(request)
-            .gather(responseAdapter())
-            .findFirst()
-            .orElseThrow();
+        try (var stream = execute(request).gather(responseAdapter())) {
+            return stream.findFirst().orElseThrow();
+        }
     }
     
     /**

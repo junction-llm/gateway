@@ -28,6 +28,7 @@ public class ModelCacheService {
     private static record CacheEntry(List<ModelInfo> models, Instant expiry) {}
     
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private final Map<String, Object> refreshLocks = new ConcurrentHashMap<>();
     private final GatewayTelemetry telemetry;
     private final GatewayTracing tracing;
 
@@ -55,13 +56,37 @@ public class ModelCacheService {
      */
     public List<ModelInfo> getModels(String providerId, String providerName, java.util.function.Supplier<List<ModelInfo>> fetcher) {
         var entry = cache.get(providerId);
-        
-        if (entry != null && Instant.now().isBefore(entry.expiry())) {
-            log.debug("Cache hit for {} models ({} entries)", providerName, entry.models().size());
-            telemetry.recordModelCacheHit(providerId);
+        if (isFresh(entry)) {
+            recordCacheHit(providerId, providerName, entry);
             return entry.models();
         }
-        
+
+        var refreshLock = refreshLocks.computeIfAbsent(providerId, ignored -> new Object());
+        synchronized (refreshLock) {
+            try {
+                entry = cache.get(providerId);
+                if (isFresh(entry)) {
+                    recordCacheHit(providerId, providerName, entry);
+                    return entry.models();
+                }
+
+                return refreshModels(providerId, providerName, fetcher);
+            } finally {
+                refreshLocks.remove(providerId, refreshLock);
+            }
+        }
+    }
+
+    private boolean isFresh(CacheEntry entry) {
+        return entry != null && Instant.now().isBefore(entry.expiry());
+    }
+
+    private void recordCacheHit(String providerId, String providerName, CacheEntry entry) {
+        log.debug("Cache hit for {} models ({} entries)", providerName, entry.models().size());
+        telemetry.recordModelCacheHit(providerId);
+    }
+
+    private List<ModelInfo> refreshModels(String providerId, String providerName, java.util.function.Supplier<List<ModelInfo>> fetcher) {
         log.info("Cache miss for {}, fetching fresh models", providerName);
         telemetry.recordModelCacheMiss(providerId);
         try (var traceScope = tracing.startSpan("junction.model_cache.refresh")) {
@@ -86,7 +111,7 @@ public class ModelCacheService {
             throw ex;
         }
     }
-    
+
     /**
      * Evicts a specific provider's cache entry.
      * 

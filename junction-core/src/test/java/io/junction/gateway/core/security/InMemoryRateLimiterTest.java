@@ -1,6 +1,12 @@
 package io.junction.gateway.core.security;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for {@link InMemoryRateLimiter}.
@@ -150,4 +156,41 @@ class InMemoryRateLimiterTest {
         var result = rateLimiter.checkAndIncrement("test-client", tier);
         assertFalse(result.minuteWindow().allowed());
     }
+    @Test
+    void checkAndIncrementIsAtomicUnderConcurrency() throws Exception {
+        var tier = ApiKey.Tier.FREE;
+        int attempts = 100;
+        var ready = new CountDownLatch(attempts);
+        var start = new CountDownLatch(1);
+        var done = new CountDownLatch(attempts);
+        var allowed = new AtomicInteger();
+        var executor = Executors.newFixedThreadPool(attempts);
+
+        for (int i = 0; i < attempts; i++) {
+            executor.submit(() -> {
+                try {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    if (rateLimiter.checkAndIncrement("concurrent-client", tier).allowed()) {
+                        allowed.incrementAndGet();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail(e);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        executor.shutdownNow();
+
+        assertEquals(tier.requestsPerMinute(), allowed.get());
+        assertEquals(tier.requestsPerMinute(), rateLimiter.getCount("concurrent-client", RateLimiter.TimeWindow.MINUTE));
+        assertFalse(rateLimiter.checkAndIncrement("concurrent-client", tier).allowed());
+    }
+
 }

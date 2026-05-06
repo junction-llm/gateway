@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.5 - 2026-05-05
+
+### Changed
+
+- Disabled per-request file logging by default and consolidated structured request metadata logging to reduce request-path I/O and allocation overhead.
+- Reworked provider routing to use cached health, true round-robin selection, provider request timeouts, concurrency bulkheads, and stream idle controls.
+- Added SSE timeout and active stream limits, with provider stream closure on cancellation.
+- Deferred API-key usage persistence off the validation path and configured pooled JDBC storage.
+- Made rate limiting atomic and bounded, fixed duplicate model-list IP rate counting, and collapsed concurrent model-cache refreshes.
+- Bounded and hardened remote image fetching for Ollama multimodal requests.
+- Reduced hot-path CPU/GC cost by reusing ObjectMapper instances, pre-parsing IP whitelist configuration, and optimizing API-key format validation.
+
 ## 0.0.4 - 2026-03-21
 
 ### Added

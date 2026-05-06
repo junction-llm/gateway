@@ -21,6 +21,7 @@ public class JunctionProperties {
     private ClientAdapters clientAdapters = new ClientAdapters();
     private Logging logging = new Logging();
     private Observability observability = new Observability();
+    private Streaming streaming = new Streaming();
     
     
     public static class Providers {
@@ -37,6 +38,11 @@ public class JunctionProperties {
         private boolean enabled = false;
         private String baseUrl = "http://localhost:11434";
         private String defaultModel = "kimi-k2.5:cloud";
+        private int maxRemoteImageBytes = 20 * 1024 * 1024;
+        private boolean allowPrivateRemoteImageUrls = false;
+        private long connectTimeoutMillis = 10_000;
+        private long requestTimeoutMillis = 300_000;
+        private int maxConcurrentRequests = 100;
         
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -44,12 +50,25 @@ public class JunctionProperties {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getDefaultModel() { return defaultModel; }
         public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
+        public int getMaxRemoteImageBytes() { return maxRemoteImageBytes; }
+        public void setMaxRemoteImageBytes(int maxRemoteImageBytes) { this.maxRemoteImageBytes = maxRemoteImageBytes; }
+        public boolean isAllowPrivateRemoteImageUrls() { return allowPrivateRemoteImageUrls; }
+        public void setAllowPrivateRemoteImageUrls(boolean allowPrivateRemoteImageUrls) { this.allowPrivateRemoteImageUrls = allowPrivateRemoteImageUrls; }
+        public long getConnectTimeoutMillis() { return connectTimeoutMillis; }
+        public void setConnectTimeoutMillis(long connectTimeoutMillis) { this.connectTimeoutMillis = connectTimeoutMillis; }
+        public long getRequestTimeoutMillis() { return requestTimeoutMillis; }
+        public void setRequestTimeoutMillis(long requestTimeoutMillis) { this.requestTimeoutMillis = requestTimeoutMillis; }
+        public int getMaxConcurrentRequests() { return maxConcurrentRequests; }
+        public void setMaxConcurrentRequests(int maxConcurrentRequests) { this.maxConcurrentRequests = maxConcurrentRequests; }
     }
     
     public static class Gemini {
         private boolean enabled = false;
         private String apiKey;
         private String model = "gemini-1.5-flash";
+        private long connectTimeoutMillis = 10_000;
+        private long requestTimeoutMillis = 300_000;
+        private int maxConcurrentRequests = 100;
         
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -57,9 +76,35 @@ public class JunctionProperties {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
+        public long getConnectTimeoutMillis() { return connectTimeoutMillis; }
+        public void setConnectTimeoutMillis(long connectTimeoutMillis) { this.connectTimeoutMillis = connectTimeoutMillis; }
+        public long getRequestTimeoutMillis() { return requestTimeoutMillis; }
+        public void setRequestTimeoutMillis(long requestTimeoutMillis) { this.requestTimeoutMillis = requestTimeoutMillis; }
+        public int getMaxConcurrentRequests() { return maxConcurrentRequests; }
+        public void setMaxConcurrentRequests(int maxConcurrentRequests) { this.maxConcurrentRequests = maxConcurrentRequests; }
     }
     
     
+    public static class Streaming {
+        /** SSE emitter timeout in milliseconds; zero or negative disables the timeout */
+        private long sseTimeoutMillis = 300_000;
+
+        /** Maximum concurrently active SSE streams; zero or negative disables admission limiting */
+        private int maxActiveStreams = 1_000;
+
+        /** Maximum provider-stream idle time between chunks in milliseconds; zero or negative disables the idle timeout */
+        private long streamIdleTimeoutMillis = 60_000;
+
+        public long getSseTimeoutMillis() { return sseTimeoutMillis; }
+        public void setSseTimeoutMillis(long sseTimeoutMillis) { this.sseTimeoutMillis = sseTimeoutMillis; }
+
+        public int getMaxActiveStreams() { return maxActiveStreams; }
+        public void setMaxActiveStreams(int maxActiveStreams) { this.maxActiveStreams = maxActiveStreams; }
+
+        public long getStreamIdleTimeoutMillis() { return streamIdleTimeoutMillis; }
+        public void setStreamIdleTimeoutMillis(long streamIdleTimeoutMillis) { this.streamIdleTimeoutMillis = streamIdleTimeoutMillis; }
+    }
+
     public static class Security {
         private ApiKey apiKey = new ApiKey();
         private IpRateLimit ipRateLimit = new IpRateLimit();
@@ -102,9 +147,39 @@ public class JunctionProperties {
         
         /** PostgreSQL password */
         private String postgresqlPassword = "${JUNCTION_POSTGRES_PASSWORD:}";
+
+        /** Maximum connections in the API-key JDBC pool */
+        private int jdbcPoolMaximumPoolSize = 10;
+
+        /** Minimum idle connections retained in the API-key JDBC pool */
+        private int jdbcPoolMinimumIdle = 0;
+
+        /** Maximum time in milliseconds to wait for an API-key JDBC connection */
+        private long jdbcPoolConnectionTimeoutMillis = 30_000;
+
+        /** Maximum time in milliseconds an idle API-key JDBC connection may remain in the pool */
+        private long jdbcPoolIdleTimeoutMillis = 600_000;
+
+        /** Maximum lifetime in milliseconds for API-key JDBC connections */
+        private long jdbcPoolMaxLifetimeMillis = 1_800_000;
+
+        /** Maximum time in milliseconds Hikari waits to initialize the API-key JDBC pool; use 0 to validate without fail-fast connection attempts */
+        private long jdbcPoolInitializationFailTimeoutMillis = 1;
         
         /** Startup seed API keys added when missing across all storage backends */
         private List<PreconfiguredKey> preconfigured = new ArrayList<>();
+
+        /** Usage recorder mode: sync, async, or noop */
+        private String usageRecorder = "async";
+
+        /** Maximum distinct API keys pending async usage flush */
+        private int usageRecorderMaxPendingKeys = 10_000;
+
+        /** Async usage recorder flush interval in milliseconds */
+        private long usageRecorderFlushIntervalMillis = 5_000;
+
+        /** Async usage recorder shutdown flush timeout in milliseconds */
+        private long usageRecorderShutdownTimeoutMillis = 2_000;
         
         public boolean isRequired() { return required; }
         public void setRequired(boolean required) { this.required = required; }
@@ -132,9 +207,39 @@ public class JunctionProperties {
         
         public String getPostgresqlPassword() { return postgresqlPassword; }
         public void setPostgresqlPassword(String postgresqlPassword) { this.postgresqlPassword = postgresqlPassword; }
+
+        public int getJdbcPoolMaximumPoolSize() { return jdbcPoolMaximumPoolSize; }
+        public void setJdbcPoolMaximumPoolSize(int jdbcPoolMaximumPoolSize) { this.jdbcPoolMaximumPoolSize = jdbcPoolMaximumPoolSize; }
+
+        public int getJdbcPoolMinimumIdle() { return jdbcPoolMinimumIdle; }
+        public void setJdbcPoolMinimumIdle(int jdbcPoolMinimumIdle) { this.jdbcPoolMinimumIdle = jdbcPoolMinimumIdle; }
+
+        public long getJdbcPoolConnectionTimeoutMillis() { return jdbcPoolConnectionTimeoutMillis; }
+        public void setJdbcPoolConnectionTimeoutMillis(long jdbcPoolConnectionTimeoutMillis) { this.jdbcPoolConnectionTimeoutMillis = jdbcPoolConnectionTimeoutMillis; }
+
+        public long getJdbcPoolIdleTimeoutMillis() { return jdbcPoolIdleTimeoutMillis; }
+        public void setJdbcPoolIdleTimeoutMillis(long jdbcPoolIdleTimeoutMillis) { this.jdbcPoolIdleTimeoutMillis = jdbcPoolIdleTimeoutMillis; }
+
+        public long getJdbcPoolMaxLifetimeMillis() { return jdbcPoolMaxLifetimeMillis; }
+        public void setJdbcPoolMaxLifetimeMillis(long jdbcPoolMaxLifetimeMillis) { this.jdbcPoolMaxLifetimeMillis = jdbcPoolMaxLifetimeMillis; }
+
+        public long getJdbcPoolInitializationFailTimeoutMillis() { return jdbcPoolInitializationFailTimeoutMillis; }
+        public void setJdbcPoolInitializationFailTimeoutMillis(long jdbcPoolInitializationFailTimeoutMillis) { this.jdbcPoolInitializationFailTimeoutMillis = jdbcPoolInitializationFailTimeoutMillis; }
         
         public List<PreconfiguredKey> getPreconfigured() { return preconfigured; }
         public void setPreconfigured(List<PreconfiguredKey> preconfigured) { this.preconfigured = preconfigured; }
+
+        public String getUsageRecorder() { return usageRecorder; }
+        public void setUsageRecorder(String usageRecorder) { this.usageRecorder = usageRecorder; }
+
+        public int getUsageRecorderMaxPendingKeys() { return usageRecorderMaxPendingKeys; }
+        public void setUsageRecorderMaxPendingKeys(int usageRecorderMaxPendingKeys) { this.usageRecorderMaxPendingKeys = usageRecorderMaxPendingKeys; }
+
+        public long getUsageRecorderFlushIntervalMillis() { return usageRecorderFlushIntervalMillis; }
+        public void setUsageRecorderFlushIntervalMillis(long usageRecorderFlushIntervalMillis) { this.usageRecorderFlushIntervalMillis = usageRecorderFlushIntervalMillis; }
+
+        public long getUsageRecorderShutdownTimeoutMillis() { return usageRecorderShutdownTimeoutMillis; }
+        public void setUsageRecorderShutdownTimeoutMillis(long usageRecorderShutdownTimeoutMillis) { this.usageRecorderShutdownTimeoutMillis = usageRecorderShutdownTimeoutMillis; }
     }
     
     public static class PreconfiguredKey {
@@ -272,6 +377,9 @@ public class JunctionProperties {
 
     public Observability getObservability() { return observability; }
     public void setObservability(Observability observability) { this.observability = observability; }
+
+    public Streaming getStreaming() { return streaming; }
+    public void setStreaming(Streaming streaming) { this.streaming = streaming; }
     
     
     public Ollama getOllama() { return providers.getOllama(); }

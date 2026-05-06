@@ -1,34 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
-    
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
-    
-    <appender name="PER_REQUEST" class="io.junction.gateway.starter.logging.PerRequestFileAppender">
-        <basePath>logs</basePath>
-    </appender>
-    
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
-    
-    <logger name="io.junction.gateway" level="DEBUG" additivity="false">
+
+    <logger name="io.junction.gateway" level="INFO" additivity="false">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="PER_REQUEST"/>
     </logger>
 
-    <logger name="io.junction.gateway.payload.ollama" level="DEBUG" additivity="false">
-        <appender-ref ref="PER_REQUEST"/>
-    </logger>
+    <!--
+        Per-request file logging creates one writer/file queue per trace and is expensive
+        enough to be unsafe as a default. Enable the "per-request-logging" Spring
+        profile only for short, targeted diagnostics.
+    -->
+    <springProfile name="per-request-logging">
+        <appender name="PER_REQUEST" class="io.junction.gateway.starter.logging.PerRequestFileAppender">
+            <basePath>logs</basePath>
+        </appender>
 
-    <logger name="io.junction.gateway.payload.chat.response" level="DEBUG" additivity="false">
-        <appender-ref ref="PER_REQUEST"/>
-    </logger>
-    
+        <logger name="io.junction.gateway" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="PER_REQUEST"/>
+        </logger>
+
+        <logger name="io.junction.gateway.payload.ollama" level="DEBUG" additivity="false">
+            <appender-ref ref="PER_REQUEST"/>
+        </logger>
+
+        <logger name="io.junction.gateway.payload.chat.response" level="DEBUG" additivity="false">
+            <appender-ref ref="PER_REQUEST"/>
+        </logger>
+    </springProfile>
+
     <logger name="org.springframework" level="INFO"/>
     <logger name="org.springframework.web" level="INFO"/>
 </configuration>

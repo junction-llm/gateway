@@ -86,7 +86,7 @@ class RoundRobinRouterTest {
     }
 
     @Test
-    void routeChatCompletionsDefaultsToOllamaWhenNoPreferredProvider() throws IOException {
+    void routeChatCompletionsUsesRoundRobinOrderWhenNoPreferredProvider() throws IOException {
         var server = startOllamaHealthServer();
         try {
             var textOnly = new GeminiProvider("test-api-key", "gemini-1.5-flash");
@@ -109,7 +109,7 @@ class RoundRobinRouterTest {
             );
 
             var selected = router.route(request, null);
-            assertEquals("ollama", selected.providerId());
+            assertEquals("gemini", selected.providerId());
         } finally {
             server.stop(0);
         }
@@ -134,9 +134,9 @@ class RoundRobinRouterTest {
 
             var selected = router.route(request);
 
-            assertEquals("ollama", selected.providerId());
-            assertEquals(List.of("chat:ollama:false"), telemetry.routeSelections);
-            assertEquals(List.of("gemini:true", "ollama:true"), telemetry.healthChecks.stream().sorted().toList());
+            assertEquals("gemini", selected.providerId());
+            assertEquals(List.of("chat:gemini:false"), telemetry.routeSelections);
+            assertEquals(List.of(), telemetry.healthChecks);
         } finally {
             server.stop(0);
         }
@@ -144,11 +144,12 @@ class RoundRobinRouterTest {
 
     @Test
     @Timeout(10)
-    void routeChatCompletionsDefaultsToNonOllamaWhenOllamaUnavailable() {
+    void routeChatCompletionsDefaultsToNonOllamaWhenCachedOllamaUnavailable() {
         var router = new RoundRobinRouter(List.of(
             new OllamaProvider("http://127.0.0.1:1", "qwen3.5"),
             new GeminiProvider("test-api-key", "gemini-1.5-flash")
         ));
+        router.updateHealth("ollama", false);
 
         var request = new ChatCompletionRequest(
             "qwen3.5",
@@ -259,6 +260,7 @@ class RoundRobinRouterTest {
             new OllamaProvider("http://127.0.0.1:1", "qwen3.5"),
             new GeminiProvider("test-api-key", "gemini-1.5-flash")
         ));
+        router.updateHealth("ollama", false);
 
         var request = new ChatCompletionRequest(
             "qwen3.5",

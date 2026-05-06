@@ -29,6 +29,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 
 /**
@@ -79,7 +80,12 @@ public class JunctionAutoConfiguration {
             props.getOllama().getBaseUrl(),
             props.getOllama().getDefaultModel(),
             telemetry,
-            tracing
+            tracing,
+            props.getOllama().getMaxRemoteImageBytes(),
+            Duration.ofMillis(props.getOllama().getConnectTimeoutMillis()),
+            Duration.ofMillis(props.getOllama().getRequestTimeoutMillis()),
+            props.getOllama().getMaxConcurrentRequests(),
+            props.getOllama().isAllowPrivateRemoteImageUrls()
         );
     }
     
@@ -92,7 +98,10 @@ public class JunctionAutoConfiguration {
             props.getGemini().getApiKey(),
             props.getGemini().getModel(),
             telemetry,
-            tracing
+            tracing,
+            Duration.ofMillis(props.getGemini().getConnectTimeoutMillis()),
+            Duration.ofMillis(props.getGemini().getRequestTimeoutMillis()),
+            props.getGemini().getMaxConcurrentRequests()
         );
     }
     
@@ -179,12 +188,14 @@ public class JunctionAutoConfiguration {
     }
     
     @Bean
-    public ApiKeyValidator apiKeyValidator(ApiKeyRepository repository, 
+    public ApiKeyValidator apiKeyValidator(ApiKeyRepository repository,
                                            RateLimiter rateLimiter,
+                                           ApiKeyUsageRecorder usageRecorder,
                                            JunctionProperties props) {
         return new ApiKeyValidator(
             repository,
             rateLimiter,
+            usageRecorder,
             props.getApiKeyConfig().isRequired()
         );
     }

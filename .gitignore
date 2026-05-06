@@ -7,3 +7,4 @@ target/
 **/target/
 
 junction-samples/logs/
+.DS_Store

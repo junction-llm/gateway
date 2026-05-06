@@ -1,13 +1,13 @@
 # API Key Security
 
-> Version: `0.0.4`
+> Version: `0.0.5`
 > Main branch status: `memory`, `file`, `h2`, and `postgresql` backends are available.  
 
 ## Overview
 
 Junction Gateway includes API key validation for the protected chat completions, embeddings, and model listing endpoints.
 
-Supported in `0.0.4`:
+Supported in `0.0.5`:
 - In-memory API key storage
 - File-backed API key storage
 - H2-backed API key storage
@@ -19,7 +19,7 @@ Supported in `0.0.4`:
 - Optional per-key model restrictions
 - OpenAI-style error responses
 
-Not yet implemented in `0.0.4`:
+Not yet implemented in `0.0.5`:
 - Rate limit response headers
 
 ## Quick Start
@@ -36,7 +36,7 @@ junction:
           tier: ENTERPRISE
 ```
 
-Persistent backends in `0.0.4`:
+Persistent backends in `0.0.5`:
 
 ```yaml
 junction:
@@ -54,6 +54,8 @@ junction:
       h2-url: jdbc:h2:file:${JUNCTION_H2_PATH:./data/junction};DB_CLOSE_DELAY=-1
       h2-username: sa
       h2-password: ""
+      jdbc-pool-maximum-pool-size: 10
+      jdbc-pool-minimum-idle: 0
 ```
 
 ```yaml
@@ -64,11 +66,14 @@ junction:
       postgresql-url: ${JUNCTION_POSTGRES_URL:jdbc:postgresql://localhost:5432/junction}
       postgresql-username: ${JUNCTION_POSTGRES_USER:junction}
       postgresql-password: ${JUNCTION_POSTGRES_PASSWORD:}
+      jdbc-pool-maximum-pool-size: 10
+      jdbc-pool-minimum-idle: 0
 ```
 
 Notes:
 - `preconfigured` keys are additive seed data across all storage backends.
 - The file backend rewrites the YAML file on key mutations and usage updates and is best suited to single-node, lower-throughput deployments.
+- H2 and PostgreSQL API-key storage use a dedicated HikariCP pool by default. Tune `jdbc-pool-maximum-pool-size`, `jdbc-pool-minimum-idle`, `jdbc-pool-connection-timeout-millis`, `jdbc-pool-idle-timeout-millis`, and `jdbc-pool-max-lifetime-millis` for production load and database limits.
 - PostgreSQL storage requires the PostgreSQL JDBC driver on the application classpath.
 - Rate-limit windows remain in-memory in this iteration.
 
@@ -154,7 +159,7 @@ junc_aB3dE5fG7hI9jK1lM2nO3pQ4rS5tU6vW7xY8zA0
 
 ## Current Storage Model
 
-Available backends on ``0.0.4`:
+Available backends on `0.0.5`:
 - `memory`: keys are lost on restart
 - `file`: YAML-backed storage with write-through updates for key changes and usage counts
 - `h2`: JDBC-backed persistent storage

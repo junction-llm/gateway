@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -215,6 +216,22 @@ class GeminiProviderTest {
         
         assertNotNull(result);
         assertTrue(result.contains("\"contents\":"));
+    }
+
+    @Test
+    void testConstructorRejectsInvalidMaxConcurrentRequests() {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new GeminiProvider(
+                "test-api-key",
+                "gemini-1.5-flash",
+                null,
+                null,
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                0
+            )
+        );
     }
 
     private String invokeEscapeJson(String input) {

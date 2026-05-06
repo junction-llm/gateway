@@ -51,6 +51,49 @@ public final class ApiKeyStorageConfigurationValidator {
                 "junction.security.api-key.postgresql-url must be set when junction.security.api-key.storage=postgresql."
             );
         }
+
+        if ("h2".equals(storage) || "postgresql".equals(storage)) {
+            validateJdbcPool();
+        }
+    }
+
+    private void validateJdbcPool() {
+        var apiKey = properties.getApiKeyConfig();
+        if (apiKey.getJdbcPoolMaximumPoolSize() < 1) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-maximum-pool-size must be at least 1."
+            );
+        }
+        if (apiKey.getJdbcPoolMinimumIdle() < 0) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-minimum-idle must be at least 0."
+            );
+        }
+        if (apiKey.getJdbcPoolMinimumIdle() > apiKey.getJdbcPoolMaximumPoolSize()) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-minimum-idle must be less than or equal to jdbc-pool-maximum-pool-size."
+            );
+        }
+        if (apiKey.getJdbcPoolConnectionTimeoutMillis() < 250) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-connection-timeout-millis must be at least 250."
+            );
+        }
+        if (apiKey.getJdbcPoolIdleTimeoutMillis() < 10_000) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-idle-timeout-millis must be at least 10000."
+            );
+        }
+        if (apiKey.getJdbcPoolMaxLifetimeMillis() < 30_000) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-max-lifetime-millis must be at least 30000."
+            );
+        }
+        if (apiKey.getJdbcPoolInitializationFailTimeoutMillis() < -1) {
+            throw new IllegalStateException(
+                "junction.security.api-key.jdbc-pool-initialization-fail-timeout-millis must be at least -1."
+            );
+        }
     }
 
     private String normalizedStorage() {

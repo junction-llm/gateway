@@ -3,6 +3,11 @@ package io.junction.gateway.core.security;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -239,4 +244,103 @@ class IpRateLimiterTest {
             assertTrue(result.isAllowed(), "Request " + (i + 1) + " should be allowed");
         }
     }
+    @Test
+    void checkAndIncrementIsAtomicUnderConcurrency() throws Exception {
+        var limiter = new IpRateLimiter(10, 100, true);
+        int attempts = 80;
+        var ready = new CountDownLatch(attempts);
+        var start = new CountDownLatch(1);
+        var done = new CountDownLatch(attempts);
+        var allowed = new AtomicInteger();
+        var executor = Executors.newFixedThreadPool(attempts);
+
+        for (int i = 0; i < attempts; i++) {
+            executor.submit(() -> {
+                try {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    if (limiter.checkAndIncrement("203.0.113.77").isAllowed()) {
+                        allowed.incrementAndGet();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail(e);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        executor.shutdownNow();
+
+        assertEquals(10, allowed.get());
+        assertEquals(10, limiter.getCount("203.0.113.77", IpRateLimiter.TimeWindow.MINUTE));
+        assertFalse(limiter.checkAndIncrement("203.0.113.77").isAllowed());
+    }
+
+    @Test
+    void publicIpStateIsBoundedByConfiguredCapacity() {
+        var limiter = new IpRateLimiter(10, 100, true, 2);
+
+        assertTrue(limiter.checkAndIncrement("203.0.113.1").isAllowed());
+        assertTrue(limiter.checkAndIncrement("203.0.113.2").isAllowed());
+
+        var rejected = limiter.checkAndIncrement("203.0.113.3");
+
+        assertFalse(rejected.isAllowed());
+        assertEquals(2, limiter.getStateSize());
+        assertEquals("IP rate limit state capacity exceeded", rejected.rejectionReason());
+    }
+
+    @Test
+    void concurrentNewIpAdmissionDoesNotExceedConfiguredCapacity() throws Exception {
+        var limiter = new IpRateLimiter(10, 100, true, 2);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(16);
+        var ready = new CountDownLatch(16);
+        var start = new CountDownLatch(1);
+        var done = new CountDownLatch(16);
+        var allowed = new AtomicInteger();
+
+        for (int i = 0; i < 16; i++) {
+            final int index = i;
+            executor.submit(() -> {
+                try {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    if (limiter.checkAndIncrement("203.0.113." + (100 + index)).isAllowed()) {
+                        allowed.incrementAndGet();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail(e);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        executor.shutdownNow();
+
+        assertEquals(2, allowed.get());
+        assertEquals(2, limiter.getStateSize());
+    }
+
+    @Test
+    void unlimitedAndInternalRequestsDoNotAllocateIpState() {
+        var unlimited = new IpRateLimiter(0, 0, true, 2);
+        assertTrue(unlimited.checkAndIncrement("203.0.113.1").isAllowed());
+        assertEquals(0, unlimited.getStateSize());
+
+        var limiter = new IpRateLimiter(1, 1, true, 2);
+        assertTrue(limiter.checkAndIncrement("127.0.0.1").isAllowed());
+        assertTrue(limiter.checkAndIncrement("10.0.0.1").isAllowed());
+        assertEquals(0, limiter.getStateSize());
+    }
+
 }

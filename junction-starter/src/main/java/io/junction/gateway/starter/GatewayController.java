@@ -16,6 +16,7 @@ import io.junction.gateway.starter.clientcompat.ClientAdapterConfig;
 import io.junction.gateway.starter.clientcompat.ClientCompatibilityService;
 import io.junction.gateway.starter.observability.JunctionObservabilityService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,8 +32,19 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 /**
  * OpenAI-compatible API Gateway Controller.
@@ -72,6 +84,9 @@ public class GatewayController {
     private final ModelCacheService modelCacheService;
     private final JunctionObservabilityService observabilityService;
     private final GatewayTracing gatewayTracing;
+    private final Semaphore streamAdmission;
+    private final ScheduledExecutorService streamIdleTimeoutExecutor;
+    private final AtomicReference<ParsedIpWhitelist> parsedIpWhitelist = new AtomicReference<>(ParsedIpWhitelist.empty());
     
     @Autowired
     public GatewayController(Router router, 
@@ -92,6 +107,11 @@ public class GatewayController {
         this.modelCacheService = modelCacheService;
         this.observabilityService = observabilityService;
         this.gatewayTracing = gatewayTracing;
+        int maxActiveStreams = junctionProperties.getStreaming().getMaxActiveStreams();
+        this.streamAdmission = maxActiveStreams > 0 ? new Semaphore(maxActiveStreams) : null;
+        this.streamIdleTimeoutExecutor = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual()
+            .name("junction-stream-idle-timeout-", 0)
+            .factory());
     }
     
     /**
@@ -312,100 +332,147 @@ public class GatewayController {
      */
     private boolean isIpAllowed(String clientIp) {
         var whitelistConfig = junctionProperties.getSecurity().getIpWhitelist();
-        
+
         if (!whitelistConfig.isEnabled()) {
             return true;
         }
-        
+
         if (whitelistConfig.isAllowPrivateIps() && isPrivateIp(clientIp)) {
             return true;
         }
-        
-        String allowedIps = whitelistConfig.getAllowedIps();
-        if (allowedIps == null || allowedIps.isBlank()) {
+
+        ParsedIpWhitelist whitelist = parsedIpWhitelistFor(whitelistConfig.getAllowedIps());
+        if (whitelist.allowsAll()) {
             return true;
         }
-        
-        String[] allowed = allowedIps.split(",");
-        for (String allowedIp : allowed) {
-            String ip = allowedIp.trim();
-            if (ip.isEmpty()) continue;
-            
-            if (ip.equals(clientIp)) {
-                return true;
-            }
-            
-            if (ip.contains("/")) {
-                if (isIpInCidrRange(clientIp, ip)) {
-                    return true;
-                }
-            }
-        }
-        
-        return false;
+
+        Integer clientIpv4 = parseIpv4(clientIp);
+        return whitelist.allows(clientIp, clientIpv4);
     }
-    
-    /**
-     * Checks if an IP is in a CIDR range.
-     * 
-     * @param ip the IP address to check
-     * @param cidr the CIDR range to check against (e.g. "
-     * @return true if the IP is in the range, false otherwise
-     */
-    private boolean isIpInCidrRange(String ip, String cidr) {
-        try {
-            String[] parts = cidr.split("/");
-            String network = parts[0];
-            int prefixLength = Integer.parseInt(parts[1]);
-            
-            byte[] ipBytes = ipToBytes(ip);
-            byte[] networkBytes = ipToBytes(network);
-            
-            if (ipBytes == null || networkBytes == null) {
-                return false;
-            }
-            
-            int mask = 0xFFFFFFFF << (32 - prefixLength);
-            
-            int ipInt = ((ipBytes[0] & 0xFF) << 24) |
-                       ((ipBytes[1] & 0xFF) << 16) |
-                       ((ipBytes[2] & 0xFF) << 8) |
-                       (ipBytes[3] & 0xFF);
-                       
-            int networkInt = ((networkBytes[0] & 0xFF) << 24) |
-                            ((networkBytes[1] & 0xFF) << 16) |
-                            ((networkBytes[2] & 0xFF) << 8) |
-                            (networkBytes[3] & 0xFF);
-            
-            return (ipInt & mask) == (networkInt & mask);
-        } catch (Exception e) {
-            log.warn("Error checking CIDR range {} for IP {}: {}", cidr, ip, e.getMessage());
-            return false;
+
+    private ParsedIpWhitelist parsedIpWhitelistFor(String allowedIps) {
+        String normalized = allowedIps == null ? "" : allowedIps;
+        ParsedIpWhitelist current = parsedIpWhitelist.get();
+        if (current.source().equals(normalized)) {
+            return current;
         }
+
+        ParsedIpWhitelist updated = ParsedIpWhitelist.parse(normalized);
+        if (parsedIpWhitelist.compareAndSet(current, updated)) {
+            return updated;
+        }
+        return parsedIpWhitelist.get();
     }
-    
+
     /**
-     * Converts IP address string to byte array.
-     * 
-     * @param ip the IP address in string format (e.g. "
-     * @return byte array representation of the IP address, or null if invalid
+     * Converts an IPv4 address string to an integer, or null if invalid.
+     *
+     * @param ip the IP address in string format
+     * @return integer representation of the IPv4 address, or null if invalid
      */
-    private byte[] ipToBytes(String ip) {
+    private static Integer parseIpv4(String ip) {
         try {
             String[] parts = ip.split("\\.");
             if (parts.length != 4) {
                 return null;
             }
-            byte[] bytes = new byte[4];
-            for (int i = 0; i < 4; i++) {
-                bytes[i] = (byte) Integer.parseInt(parts[i]);
+            int result = 0;
+            for (String part : parts) {
+                if (part.isBlank()) {
+                    return null;
+                }
+                int octet = Integer.parseInt(part);
+                if (octet < 0 || octet > 255) {
+                    return null;
+                }
+                result = (result << 8) | octet;
             }
-            return bytes;
+            return result;
         } catch (Exception e) {
             return null;
         }
     }
-    
+
+    private record ParsedIpWhitelist(String source, boolean allowsAll, List<String> exactIps, List<CidrRange> cidrRanges) {
+        static ParsedIpWhitelist empty() {
+            return new ParsedIpWhitelist("", true, List.of(), List.of());
+        }
+
+        static ParsedIpWhitelist parse(String allowedIps) {
+            if (allowedIps == null || allowedIps.isBlank()) {
+                return empty();
+            }
+
+            List<String> exactIps = new ArrayList<>();
+            List<CidrRange> cidrRanges = new ArrayList<>();
+            for (String rawEntry : allowedIps.split(",")) {
+                String entry = rawEntry.trim();
+                if (entry.isEmpty()) {
+                    continue;
+                }
+                if (entry.contains("/")) {
+                    CidrRange cidrRange = CidrRange.parse(entry);
+                    if (cidrRange != null) {
+                        cidrRanges.add(cidrRange);
+                    } else {
+                        log.warn("Ignoring invalid CIDR whitelist entry: {}", entry);
+                    }
+                    continue;
+                }
+                exactIps.add(entry);
+            }
+
+            return new ParsedIpWhitelist(
+                allowedIps,
+                false,
+                Collections.unmodifiableList(exactIps),
+                Collections.unmodifiableList(cidrRanges)
+            );
+        }
+
+        boolean allows(String clientIp, Integer clientIpv4) {
+            if (exactIps.contains(clientIp)) {
+                return true;
+            }
+            if (clientIpv4 == null) {
+                return false;
+            }
+            for (CidrRange cidrRange : cidrRanges) {
+                if (cidrRange.contains(clientIpv4)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private record CidrRange(int network, int mask) {
+        static CidrRange parse(String cidr) {
+            String[] parts = cidr.split("/", -1);
+            if (parts.length != 2) {
+                return null;
+            }
+            Integer network = parseIpv4(parts[0].trim());
+            if (network == null) {
+                return null;
+            }
+            try {
+                int prefixLength = Integer.parseInt(parts[1].trim());
+                if (prefixLength < 0 || prefixLength > 32) {
+                    return null;
+                }
+                int mask = prefixLength == 0 ? 0 : -1 << (32 - prefixLength);
+                return new CidrRange(network & mask, mask);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
+        boolean contains(int ip) {
+            return (ip & mask) == network;
+        }
+    }
+
     /**
      * Checks if an IP is a private/internal IP.
      * 
@@ -450,43 +517,50 @@ public class GatewayController {
         return request.getRemoteAddr();
     }
     
-    private void logRequestDetails(ChatCompletionRequest request, 
+    private void logRequestDetails(ChatCompletionRequest request,
                                    ResolvedApiKey resolvedApiKey,
                                    String preferredProvider,
                                    String acceptHeader,
                                    String userAgent, HttpServletRequest httpServletRequest, String endpointType, java.util.UUID traceId) {
-        log.info("[{}] === INCOMING REQUEST [{}] ===", traceId, endpointType);
-        log.info("[{}] Client IP: {}", traceId, getClientIp(httpServletRequest));
-        log.info("[{}] Request URI: {} {}", traceId, httpServletRequest.getMethod(), httpServletRequest.getRequestURI());
-        log.info("[{}] Request Query String: {}", traceId, httpServletRequest.getQueryString());
-        log.info("[{}] Request Model: {}", traceId, request.model());
-        log.info("[{}] Request Provider Header: {}", traceId, preferredProvider != null ? preferredProvider : "<not-set>");
-        log.info("[{}] Request Stream: {}", traceId, request.stream());
-        log.info("[{}] Request Temperature: {}", traceId, request.temperature());
-        log.info("[{}] Request Messages Count: {}", traceId, request.messages() != null ? request.messages().size() : "null");
-        log.info("[{}] Accept Header: {}", traceId, acceptHeader);
-        log.info("[{}] User-Agent Header: {}", traceId, userAgent);
-        log.info("[{}] Authentication Source: {}", traceId, resolvedApiKey.source());
-        log.info("[{}] === ===", traceId);
+        log.info(
+            "[{}] incoming_request endpoint={} clientIp={} method={} uri={} query={} model={} providerHeader={} stream={} temperature={} messages={} accept={} userAgent={} authSource={}",
+            traceId,
+            endpointType,
+            getClientIp(httpServletRequest),
+            httpServletRequest.getMethod(),
+            httpServletRequest.getRequestURI(),
+            httpServletRequest.getQueryString(),
+            request.model(),
+            preferredProvider != null ? preferredProvider : "<not-set>",
+            request.stream(),
+            request.temperature(),
+            request.messages() != null ? request.messages().size() : "null",
+            acceptHeader,
+            userAgent,
+            resolvedApiKey.source()
+        );
 
         logHeaderDetails(httpServletRequest);
     }
 
     private void logEmbeddingRequestDetails(EmbeddingRequest request, ResolvedApiKey resolvedApiKey, String acceptHeader,
                                             String userAgent, HttpServletRequest httpServletRequest, java.util.UUID traceId) {
-        log.info("[{}] === INCOMING REQUEST [EMBEDDINGS] ===", traceId);
-        log.info("[{}] Client IP: {}", traceId, getClientIp(httpServletRequest));
-        log.info("[{}] Request URI: {} {}", traceId, httpServletRequest.getMethod(), httpServletRequest.getRequestURI());
-        log.info("[{}] Request Query String: {}", traceId, httpServletRequest.getQueryString());
-        log.info("[{}] Request Model: {}", traceId, request.model());
-        log.info("[{}] Request Input Count: {}", traceId, request.input() != null ? request.input().size() : "null");
-        log.info("[{}] Request Encoding Format: {}", traceId, request.encodingFormat());
-        log.info("[{}] Request Dimensions: {}", traceId, request.dimensions());
-        log.info("[{}] Request User Present: {}", traceId, request.user() != null && !request.user().isBlank());
-        log.info("[{}] Accept Header: {}", traceId, acceptHeader);
-        log.info("[{}] User-Agent Header: {}", traceId, userAgent);
-        log.info("[{}] Authentication Source: {}", traceId, resolvedApiKey.source());
-        log.info("[{}] === ===", traceId);
+        log.info(
+            "[{}] incoming_request endpoint=EMBEDDINGS clientIp={} method={} uri={} query={} model={} inputs={} encodingFormat={} dimensions={} userPresent={} accept={} userAgent={} authSource={}",
+            traceId,
+            getClientIp(httpServletRequest),
+            httpServletRequest.getMethod(),
+            httpServletRequest.getRequestURI(),
+            httpServletRequest.getQueryString(),
+            request.model(),
+            request.input() != null ? request.input().size() : "null",
+            request.encodingFormat(),
+            request.dimensions(),
+            request.user() != null && !request.user().isBlank(),
+            acceptHeader,
+            userAgent,
+            resolvedApiKey.source()
+        );
 
         logHeaderDetails(httpServletRequest);
     }
@@ -523,10 +597,46 @@ public class GatewayController {
                                         String preferredProvider,
                                         JunctionObservabilityService.RequestTracker tracker,
                                         GatewayTracing.ContextSnapshot requestParentTraceContext) {
-        var emitter = new SseEmitter(0L); 
-        emitter.onCompletion(tracker::finishSuccess);
-        emitter.onTimeout(() -> tracker.finishFailure("timeout"));
-        emitter.onError(error -> tracker.finishFailure("stream_error"));
+        var emitter = new SseEmitter(configuredSseTimeoutMillis());
+        var streamSlotHeld = new AtomicBoolean(false);
+        var cancelled = new AtomicBoolean(false);
+        var workerRef = new AtomicReference<Thread>();
+        var streamRef = new AtomicReference<Stream<ChatCompletionChunk>>();
+        var lastStreamActivityMillis = new AtomicLong(System.currentTimeMillis());
+        var idleTimeoutTaskRef = new AtomicReference<ScheduledFuture<?>>();
+        Runnable cancelIdleTimeoutTask = () -> {
+            var task = idleTimeoutTaskRef.getAndSet(null);
+            if (task != null) {
+                task.cancel(false);
+            }
+        };
+        Runnable cancelWorker = () -> {
+            cancelled.set(true);
+            cancelIdleTimeoutTask.run();
+            tracker.finishFailure("cancelled");
+            releaseStreamSlot(streamSlotHeld);
+            var stream = streamRef.getAndSet(null);
+            if (stream != null) {
+                try {
+                    stream.close();
+                } catch (Exception e) {
+                    log.debug("[{}] Ignoring provider stream close error during cancellation", traceId, e);
+                }
+            }
+            var worker = workerRef.get();
+            if (worker != null) {
+                worker.interrupt();
+            }
+        };
+        emitter.onCompletion(cancelWorker);
+        emitter.onTimeout(() -> {
+            tracker.finishFailure("timeout");
+            cancelWorker.run();
+        });
+        emitter.onError(error -> {
+            tracker.finishFailure("stream_error");
+            cancelWorker.run();
+        });
 
         ClientAdapterConfig adapterConfig;
         ChatCompletionRequest patchedRequest;
@@ -546,7 +656,7 @@ public class GatewayController {
                 : null;
         }
         
-        Thread.ofVirtual().start(() -> {
+        Runnable streamTask = () -> {
             try (var ignored = openLoggingContext(traceId, ctx);
                  var asyncSpan = gatewayTracing.startSpan("junction.gateway.stream", requestParentTraceContext)) {
                 asyncSpan.tag("junction.endpoint", "chat");
@@ -563,9 +673,14 @@ public class GatewayController {
                         
                         log.info("[{}] Processing response stream", traceId);
                         try (var stream = provider.execute(patchedRequest).gather(gatherer)) {
+                            streamRef.set(stream);
                             var iterator = stream.iterator();
-                            while (iterator.hasNext()) {
+                            while (!cancelled.get() && iterator.hasNext()) {
+                                lastStreamActivityMillis.set(System.currentTimeMillis());
                                 var chunk = iterator.next();
+                                if (cancelled.get()) {
+                                    break;
+                                }
                                 try {
                                     if (adapterConfig != null) {
                                         chunk = clientCompatService.applyResponsePatches(chunk, adapterConfig);
@@ -577,6 +692,7 @@ public class GatewayController {
 
                                     String jsonChunk = jsonMapper.writeValueAsString(chunk);
                                     emitter.send(SseEmitter.event().data(jsonChunk));
+                                    lastStreamActivityMillis.set(System.currentTimeMillis());
                                     chunkCount++;
 
                                     boolean isDone = chunk.choices() != null
@@ -596,6 +712,11 @@ public class GatewayController {
                         }
 
                         
+                        if (cancelled.get()) {
+                            log.info("[{}] SSE stream cancelled after {} chunks", traceId, chunkCount);
+                            return;
+                        }
+
                         log.info("[{}] Sending [DONE] marker", traceId);
                         emitter.send(SseEmitter.event()
                             .data("[DONE]"));
@@ -621,6 +742,10 @@ public class GatewayController {
                         sendErrorEvent(emitter, 503, "No provider available");
                         emitter.complete();
                     } catch (Exception e) {
+                        if (cancelled.get() || Thread.currentThread().isInterrupted()) {
+                            log.info("[{}] SSE stream cancelled", traceId);
+                            return;
+                        }
                         asyncSpan.error(e);
                         tracker.finishFailure("internal_error");
                         log.error("[{}] Unexpected error in SSE stream", traceId, e);
@@ -628,12 +753,84 @@ public class GatewayController {
                         emitter.complete();
                     }
                 });
+            } finally {
+                cancelIdleTimeoutTask.run();
+                streamRef.getAndSet(null);
+                releaseStreamSlot(streamSlotHeld);
             }
-        });
-        
+        };
+
+        var admitted = tryAcquireStreamSlot(emitter, traceId, tracker, streamSlotHeld);
+        if (!admitted) {
+            return emitter;
+        }
+        scheduleStreamIdleTimeout(traceId, emitter, cancelled, lastStreamActivityMillis, idleTimeoutTaskRef, cancelWorker);
+
+        var worker = Thread.ofVirtual().unstarted(streamTask);
+        workerRef.set(worker);
+        worker.start();
         return emitter;
     }
     
+    private long configuredSseTimeoutMillis() {
+        long configured = junctionProperties.getStreaming().getSseTimeoutMillis();
+        return configured > 0 ? configured : 0L;
+    }
+
+    private long configuredStreamIdleTimeoutMillis() {
+        long configured = junctionProperties.getStreaming().getStreamIdleTimeoutMillis();
+        return configured > 0 ? configured : 0L;
+    }
+
+    private void scheduleStreamIdleTimeout(java.util.UUID traceId,
+                                           SseEmitter emitter,
+                                           AtomicBoolean cancelled,
+                                           AtomicLong lastStreamActivityMillis,
+                                           AtomicReference<ScheduledFuture<?>> idleTimeoutTaskRef,
+                                           Runnable cancelWorker) {
+        long idleTimeoutMillis = configuredStreamIdleTimeoutMillis();
+        if (idleTimeoutMillis <= 0) {
+            return;
+        }
+        long checkIntervalMillis = Math.max(1_000L, Math.min(idleTimeoutMillis, 5_000L));
+        ScheduledFuture<?> task = streamIdleTimeoutExecutor.scheduleWithFixedDelay(() -> {
+            if (cancelled.get()) {
+                return;
+            }
+            long idleForMillis = System.currentTimeMillis() - lastStreamActivityMillis.get();
+            if (idleForMillis >= idleTimeoutMillis && cancelled.compareAndSet(false, true)) {
+                log.warn("[{}] Cancelling SSE stream after {} ms without provider chunks", traceId, idleForMillis);
+                cancelWorker.run();
+                emitter.completeWithError(new IOException("Provider stream idle timeout"));
+            }
+        }, checkIntervalMillis, checkIntervalMillis, TimeUnit.MILLISECONDS);
+        idleTimeoutTaskRef.set(task);
+    }
+
+    private boolean tryAcquireStreamSlot(SseEmitter emitter,
+                                         java.util.UUID traceId,
+                                         JunctionObservabilityService.RequestTracker tracker,
+                                         AtomicBoolean streamSlotHeld) {
+        if (streamAdmission == null) {
+            return true;
+        }
+        if (streamAdmission.tryAcquire()) {
+            streamSlotHeld.set(true);
+            return true;
+        }
+        tracker.finishFailure("stream_limit_exceeded");
+        log.warn("[{}] Rejecting SSE stream because max active stream limit is reached", traceId);
+        sendErrorEvent(emitter, 503, "Too many active streams");
+        emitter.complete();
+        return false;
+    }
+
+    private void releaseStreamSlot(AtomicBoolean streamSlotHeld) {
+        if (streamAdmission != null && streamSlotHeld.compareAndSet(true, false)) {
+            streamAdmission.release();
+        }
+    }
+
     private void sendErrorEvent(SseEmitter emitter, int code, String message) {
         try {
             
@@ -860,13 +1057,6 @@ public class GatewayController {
                 throw new ApiKeyAuthenticationException(validation);
             }
 
-            var ipRateResult = ipRateLimiter.checkAndIncrement(clientIp);
-            if (!ipRateResult.isAllowed()) {
-                observabilityService.recordAuthFailure("ip_rate_limit_exceeded");
-                tracker.finishFailure("ip_rate_limit_exceeded");
-                log.warn("IP {} exceeded rate limit for /models endpoint", clientIp);
-                throw new IpRateLimitExceededException(clientIp, ipRateResult);
-            }
 
             var models = ScopedValue.where(RequestContext.key(), ctx).call(() -> {
                 try (var ignored = openLoggingContext(traceId, ctx)) {
